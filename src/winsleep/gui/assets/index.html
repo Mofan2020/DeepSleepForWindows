@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeepSleep For Windows(Beta)</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+
+  <header class="bar">
+    <div class="brand">
+      <span class="dot" id="statusDot"></span>
+      <h1>DeepSleep For Windows(Beta)</h1>
+    </div>
+    <div class="meta">
+      <span id="activePlan">--</span>
+      <span class="sep">·</span>
+      <span id="idleInfo">空闲 --</span>
+    </div>
+  </header>
+
+  <section class="cards">
+    <div class="card">
+      <div class="card-label">电源计划</div>
+      <div class="card-value" id="currentPlan">读取中…</div>
+      <div class="card-actions">
+        <select id="planSelect" class="select"></select>
+        <button class="btn" id="switchBtn">切换</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">空闲切换</div>
+      <div class="card-value" id="idlePlanValue">未设置</div>
+      <div class="card-actions">
+        <span class="hint">空闲 <input id="idleSeconds" class="num" type="number" min="60" step="60"> 秒后切到</span>
+        <select id="idlePlanSelect" class="select"></select>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">服务器模式</div>
+      <div class="card-value" id="serverValue">关闭</div>
+      <div class="card-actions">
+        <label class="switch">
+          <input type="checkbox" id="serverToggle">
+          <span>持续防睡眠 + 空闲锁屏</span>
+        </label>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>自动化规则</h2>
+    <p class="muted">当所有条件同时成立时执行动作。</p>
+    <div id="ruleList" class="rules"></div>
+
+    <form id="ruleForm" class="rule-form">
+      <input class="text" id="ruleName" placeholder="规则名称">
+      <select id="ruleKind" class="select">
+        <option value="idle_at_least">空闲至少</option>
+        <option value="idle_below">空闲少于</option>
+        <option value="cpu_below">CPU 低于</option>
+        <option value="cpu_above">CPU 高于</option>
+        <option value="process_running">进程运行中</option>
+        <option value="time_window">时间窗口</option>
+      </select>
+      <input class="text" id="ruleValue" placeholder="值，例如 600 / steam / 09:00-18:00">
+      <select id="ruleAction" class="select">
+        <option value="set_power_plan">切换电源计划</option>
+        <option value="keep_awake">保持唤醒</option>
+        <option value="lock_screen">锁屏</option>
+      </select>
+      <input class="text" id="ruleActionValue" placeholder="动作参数，例如 节能">
+      <button class="btn primary" type="submit">添加</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <h2>工具</h2>
+    <div class="toolbar">
+      <label class="switch">
+        <input type="checkbox" id="keepAwakeToggle">
+        <span>保持唤醒</span>
+      </label>
+      <button class="btn" id="lockBtn">立即锁屏</button>
+      <button class="btn ghost" id="refreshBtn">刷新</button>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <span id="daemonState" class="muted"></span>
+  </footer>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>

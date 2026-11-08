@@ -1,0 +1,144 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ----------------------------------------------------------------- tests
+  test:
+    name: Lint & tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Unit tests
+        run: pytest -q
+
+      # A green test suite means nothing if the tests would still be
+      # green with the behaviour broken.  Every important piece of
+      # logic is broken on purpose and the tests have to notice.
+      - name: Mutation tests
+        run: python scripts/mutation_test.py
+
+  # -------------------------------------------------------------- windows
+  build-windows:
+    name: Build Windows (x64)
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: 'x64'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # The core is checked on Linux above; these tests need a real
+      # Windows machine because they call powercfg and the Win32 API.
+      # The marker is given explicitly because the default in
+      # pyproject.toml excludes them.
+      - name: Windows-only tests
+        run: pytest -q -m windows -p no:cacheprovider --override-ini="addopts=-q --strict-markers"
+
+      - name: Build the executable
+        run: pyinstaller --clean --noconfirm main.spec
+
+      - name: Smoke test the executable
+        shell: pwsh
+        run: |
+          $exe = "dist\DeepSleepForWindows.exe"
+          if (-not (Test-Path $exe)) { Write-Error "the executable was not produced"; exit 1 }
+          # The .exe is a GUI-subsystem binary, so PowerShell neither waits
+          # for it nor sets $LASTEXITCODE.  Run it with --version, which
+          # prints to stdout and exits straight away.
+          $out = & $exe --version 2>&1 | Out-String
+          Write-Host $out
+          if ($out -notmatch 'DeepSleep For Windows') { Write-Error "the executable did not run"; exit 1 }
+
+      - name: Smoke test the command line
+        shell: pwsh
+        run: |
+          $exe = "dist\DeepSleepForWindows.exe"
+          $out = & $exe plans 2>&1 | Out-String
+          Write-Host $out
+          if ($out -notmatch '[0-9a-fA-F]{8}-') { Write-Error "powercfg was not parsed"; exit 1 }
+
+      - name: Package (zip)
+        shell: pwsh
+        run: |
+          $name = "DeepSleepForWindows-Windows-x64"
+          Compress-Archive -Path "dist\DeepSleepForWindows" -DestinationPath "dist\$name.zip" -Force
+          Get-ChildItem dist\*.zip | ForEach-Object {
+            Write-Host "$($_.Name) -> $($_.Length) bytes"
+            if ($_.Length -lt 3000000) { Write-Error "$($_.Name) looks truncated"; exit 1 }
+          }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deepsleep-for-windows-x64
+          path: |
+            dist/DeepSleepForWindows-Windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  # --------------------------------------------------------------- release
+  release:
+    name: Publish the release
+    needs: build-windows
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: deepsleep-for-windows-x64
+          path: dist
+
+      - name: Publish the prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${GITHUB_REF_NAME}"
+          NOTES="release-notes.md"
+          test -f "$NOTES" || { echo "::error::release-notes.md is missing"; exit 1; }
+          # Every tag publishes as a prerelease.  A version the maintainer
+          # has not tested by hand stays a prerelease on purpose.
+          gh release create "$TAG" \
+            --prerelease \
+            --title "$TAG" \
+            --notes-file "$NOTES" \
+            dist/DeepSleepForWindows-Windows-x64.zip

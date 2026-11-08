@@ -1,0 +1,114 @@
+# 开发笔记
+
+记录实现过程中的决策、踩过的坑、以及验证方式。面向后续维护者。
+
+## 架构
+
+三个进程，两种会话：
+
+```
+daemon   session 0   电源计划、规则引擎、保持唤醒、状态纠偏
+   ↕  回环 TCP，逐行 JSON
+agent    session 1   读真实空闲时间、执行锁屏
+gui      session 1   pywebview 界面（可选）
+```
+
+Windows 的后台服务跑在没有键鼠的会话里。那里的进程**永远看起来是空闲的**——`GetLastInputInfo` 在 session 0 返回一个无意义的巨大值，`GetForegroundWindow` 返回 0，`LockWorkStation` 直接返回 `False`。所以空闲判断和锁屏必须由 agent（session 1）来做，daemon 只负责电源。
+
+端口在 daemon 启动时随机选，写进 `winsleep.port`，agent 读这个文件来连接。
+
+## 为什么不用命令行解析
+
+`powercfg /list` 和 `tasklist` 的输出是**本地化的**。中文系统上 `powercfg /list` 输出：
+
+```
+平衡的电源计划 GUID: 381b4222-f694-41f0-9685-ff5bb260df2e  (平衡)
+```
+
+英文系统上格式完全不同。任何基于正则的解析都只在一半机器上成立，在另一半上**静默拿到错值**（不报错，是错的）。
+
+所以：
+
+| 数据 | 来源 |
+| --- | --- |
+| 电源计划列表 | `winreg` 枚举 `SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes` |
+| 当前 / 切换计划 | `powrprof.dll` 的 `PowerGetActiveScheme` / `PowerSetActiveScheme` |
+| 进程列表 | `psutil` |
+| 用户空闲时间 | `user32.GetLastInputInfo`（session 1） |
+| 保持唤醒 | `kernel32.SetThreadExecutionState` |
+| 锁屏 | `user32.LockWorkStation`（session 1） |
+
+内置计划（平衡 / 高性能 / 节能 / 卓越性能）的显示名用**固定 GUID → 名字映射**，同时给中文和英文。自定义计划读注册表的 `FriendlyName`。
+
+试过用 MUI 的 `LoadStringExW` 拿本地化名称，`ctypes` 属性查找不稳定，多次尝试拿不到可靠结果，放弃。
+
+## 规则是用户写的，规则说了算
+
+规则引擎（`rules.py`）和 daemon 是分开的。daemon 每个 tick 会：
+
+1. 读配置里的规则
+2. 拿当前的 snapshot 去评估（`evaluate()`）
+3. 按优先级从高到低应用命中的动作
+
+命中的 `set_power_plan` **覆盖**内置的空闲/游戏逻辑——用户明明白白写下来的规则，比程序猜的准。优先级高的先应用，同一个优先级里排在前面的先应用；低优先级的规则不能覆盖高优先级已经定下的计划。
+
+`keep_awake` / `lock_screen` 同理。`run_command` 不带 shell 执行（`shell=False`），规则文件是用户自己的，但没必要把 shell 交出去。
+
+`process_running` 条件需要真实的进程列表。daemon 把「游戏列表」和「所有规则里出现的进程名」合成一份，一次 `psutil` 查询，5 秒一次，不会因为规则多而变慢。
+
+## 状态纠偏
+
+macOS 原版在 `SleepController.swift` 里会检查实际的 `disablesleep`，发现被外部改了立刻写回去。Windows 版对电源计划做同样的事：
+
+daemon 每个 tick（5 秒）都**重新读一次实际的计划**，和期望值比较，不一致就立刻 `PowerSetActiveScheme` 写回。不缓存上次的结果——缓存了就发现不了别人改过。
+
+连续 3 次切换失败才算「有别的程序在抢」，这时给出提示。成功的切换会把失败计数和提示一起清掉。
+
+实测（真机，SSH 到 `DESKTOP-9ARGO8C`）：
+
+| 步骤 | 结果 |
+| --- | --- |
+| 报告空闲 10 秒 | 计划 = Bitsum Highest Performance |
+| 报告空闲 300 秒（阈值 60 秒） | 计划 = 节能 `a1841308-3541-4fab-bc81-f71556f20b4a` |
+| 外部手动改成高性能 | daemon 5 秒内改回节能 |
+| 回到活跃 | 计划 = Bitsum Highest Performance |
+
+## 测试
+
+```
+pytest -q                    # 单元 + 集成（含真机 Windows 测试，跳过）
+pytest -q -m windows ...     # 需要真 Windows
+python scripts/mutation_test.py
+```
+
+**变异测试是强制的。** 每个新模块都要有：把实现改坏，看测试会不会红。`scripts/mutation_test.py` 里放了 10 个变异，覆盖电源计划纠偏、CPU 阈值、游戏优先、idle 阈值边界、配置里的零值陷阱、服务器模式重复锁屏、进程名匹配。
+
+当前：10/10 全部被抓住。
+
+写变异脚本的坑：
+
+- **还原必须在 `finally` 里。** 上一轮变异跑一半被杀掉，变异代码留在仓库里，下次跑测试直接红，没人知道是被变异过的。
+- **变异要改核心逻辑，别改测试。**
+- **别跟常规测试并行跑。** 变异脚本在改源码，并行跑的 pytest 读的是半改半没改的文件。
+- **被杀掉的变异跑会留残留。** kill 之后立刻 `git status` + grep 变异标记，确认源码树干净了再干别的。
+
+## 踩过的坑
+
+**`winreg.EnumKey` 的返回类型在 Python 3.13 变了。** 3.11/3.12 返回字符串，3.13 返回 `(name, class)` 元组。两种都要接。
+
+**Session 0 里 `GetLastInputInfo` 没有意义。** 会返回几万秒的假空闲值。AnyDesk 之类的远控还会注入模拟输入，让系统看起来一直很忙——这跟 session 无关，是输入注入本身。
+
+**`idle_cpu_percent` 用 `or` 兜默认值会吞掉 0。** 用户写 0 的意思是「CPU 必须完全空闲」，`0.0 or 15.0` 会静默变成 15。现在用显式的 `_number()` 读，只有缺 key 或不是数字才回退。
+
+**Windows 没有 `tail`、`base64`、`timeout`。** 远端脚本统一用 `python -c` 跑，长内容走 tar 管道或 scp。
+
+**SSH 并发会撞认证限流。** 走 `ControlMaster` 的 socket 复用一条连接；scp 也要带 `-o ControlPath=...`。
+
+**传大文件不要走 base64 + 命令行。** 命令行长度上限会把文件截断成 0 字节，而且**不报错**——远端 `certutil` 才报 `ERROR_FILE_INVALID`。长内容用 tar 管道。
+
+## 没做的部分
+
+- **没有做工具箱。** 用户明确说不要。
+- **没有做 macOS 版的全部功能。** 只做了空闲切换、游戏检测、服务器模式、规则引擎这几样基础能力。
+- **计划任务安装仍用 `schtasks` / `taskkill`。** 数据获取全部改成了 API，但任务本身的创建和删除还在用命令行——改成 Task Scheduler COM 是更彻底的做法，留待后续。
+

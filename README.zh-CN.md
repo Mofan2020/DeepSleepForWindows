@@ -1,0 +1,135 @@
+# DeepSleep For Windows(Beta)
+
+> **Windows 上的电源与睡眠管理工具，用 Python 写。** 按空闲时间切换电源计划、保持唤醒、服务器模式，以及基于规则的自动化。
+
+![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%2B%2011-blue.svg)
+![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Release](https://img.shields.io/badge/release/Mofan2020/DeepSleepForWindows)
+
+- **版本**：0.1.0
+- **语言**：Python 3.11+，pywebview
+- **协议**：MIT
+
+[English](./README.md) · [Releases](https://github.com/Mofan2020/DeepSleepForWindows/releases)
+
+## 它做什么
+
+Windows 自带的电源设置面板和 `powercfg` 命令行都回答不了大家真正关心的问题：*我走开的时候把机器切到安静的计划，回来的时候切回快的那个。*
+
+DeepSleep For Windows 替你做这件事，还允许你在这基础上写自己的规则。
+
+- **按空闲切换电源计划** —— 超过 N 分钟没有键盘或鼠标动作、并且 CPU 占用低于阈值时，切换到安静的电源计划；回来后立刻切回。
+- **游戏检测** —— 游戏进程在跑时保持高性能计划，并让机器不休眠。
+- **服务器模式** —— 持续防睡眠，空闲一段时间后自动锁屏。
+- **自动化规则** —— 把空闲时长、CPU 占用、进程是否运行、时间段、星期几组合起来，全部成立时执行动作。
+- **后台常驻** —— 两个计划任务，一个跑守护进程，一个跑在用户会话里，随时关窗口都不影响。
+- **要窗口的话也有** —— 一个 pywebview 小界面，看状态、改设置、管规则。
+
+## 工作原理
+
+Windows 的后台服务运行在没有键盘也没有鼠标的会话里。那里的进程无法判断有没有人在电脑前 —— 它看起来永远是空闲的。所以 DeepSleep For Windows 分成两半：
+
+```
+DeepSleepForWindows daemon    session 0    电源计划、规则、保持唤醒
+      ▲                                          （回环 TCP，逐行 JSON）
+      ▼
+DeepSleepForWindows agent     session 1    读真实空闲时间、锁屏
+```
+
+agent 是唯一和 Win32 API 打交道的地方。其余部分 —— 规则引擎、配置存储、电源计划处理、计划任务 —— 全是普通 Python，或者调用 Windows 自带的命令行工具。没有 pywin32，没有 .NET，没有 PowerShell。
+
+## 安装
+
+从 [Releases](https://github.com/Mofan2020/DeepSleepForWindows/releases) 下载 `.exe`，解压后运行：
+
+```bat
+DeepSleepForWindows install
+```
+
+这会注册两个计划任务。守护进程在登录时启动，agent 跑在你自己的会话里，所以它能读到真实的空闲时间。
+
+打开窗口：
+
+```bat
+DeepSleepForWindows gui
+```
+
+全部卸载：
+
+```bat
+DeepSleepForWindows uninstall
+```
+
+## 命令行
+
+```bat
+DeepSleepForWindows gui                  打开窗口
+DeepSleepForWindows status               以 JSON 打印当前状态
+DeepSleepForWindows plans                列出所有电源计划
+DeepSleepForWindows switch "平衡"        立刻切换电源计划
+DeepSleepForWindows lock                 立刻锁屏
+DeepSleepForWindows install              注册计划任务
+DeepSleepForWindows uninstall            移除计划任务
+```
+
+## 配置
+
+设置保存在 `%ProgramData%\DeepSleepForWindows\config.json`（从源码运行时是 `%LOCALAPPDATA%\DeepSleepForWindows\config.json`）。窗口会改这个文件；文件本身就是普通 JSON，也可以手改。
+
+```json
+{
+  "idle_plan": "节能",
+  "active_plan": "平衡",
+  "idle_seconds": 600,
+  "idle_cpu_percent": 15.0,
+  "game_processes": ["steam.exe", "yysls.exe"],
+  "game_keeps_awake": true,
+  "server_mode": false,
+  "server_lock_seconds": 300,
+  "keep_awake": false,
+  "rules": []
+}
+```
+
+### 规则条件
+
+| 条件 | 取值 | 含义 |
+| --- | --- | --- |
+| `idle_at_least` | 秒 | 空闲时间达到这个值。 |
+| `idle_below` | 秒 | 空闲时间小于这个值。 |
+| `cpu_below` | 百分比 | CPU 占用低于这个值。 |
+| `cpu_above` | 百分比 | CPU 占用达到或高于这个值。 |
+| `process_running` | 进程名 | 某个进程在运行。`.exe` 可写可不写。 |
+| `time_window` | `HH:MM-HH:MM` | 当前时间在这个区间内。跨零点也支持。 |
+| `day_of_week` | `mon,tue,…` | 今天是其中某一天。 |
+
+### 规则动作
+
+| 动作 | 取值 | 含义 |
+| --- | --- | --- |
+| `set_power_plan` | 计划名 | 切换电源计划。 |
+| `keep_awake` | `on` / `off` | 保持唤醒。 |
+| `lock_screen` | – | 锁屏。 |
+| `run_command` | 命令行 | 执行一条命令。 |
+
+## 源码构建
+
+```sh
+python -m venv .venv
+.venv/bin/pip install -e '.[dev]'
+.venv/bin/python -m pytest
+.venv/bin/python -m ruff check .
+```
+
+Windows 构建用 PyInstaller，配置见 `main.spec`。
+
+## 一点说明
+
+- 空闲时间只能在用户自己的会话里读到。这就是 agent 存在的原因，也是为什么只当服务跑的工具永远判断不了机器是不是空闲的。
+- 会注入模拟输入的远控软件（AnyDesk 之类）会让系统看起来一直很忙。DeepSleep For Windows 的规则可以绕开这点 —— 用 `process_running` 条件代替空闲条件。
+- 守护进程每次检查都会重新读实际的电源计划，跟期望值对不上就立刻改回来。别的程序（比如 Process Lasso）抢电源计划时，日志里会写出来。
+
+## 协议
+
+MIT，见 [LICENSE](./LICENSE)。
