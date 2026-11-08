@@ -153,8 +153,11 @@ jobs:
             if ($_.Length -lt 5000000) { Write-Error "$($_.Name) looks truncated"; exit 1 }
           }
           # Nothing but the executable may end up in the zip.
-          $inside = (Expand-Archive -Path "dist\$name.zip" -DestinationPath "$env:RUNNER_TEMP\unpacked" -Force; Get-ChildItem "$env:RUNNER_TEMP\unpacked" -Recurse)
+          $unpacked = Join-Path $env:RUNNER_TEMP "unpacked"
+          Expand-Archive -Path "dist\$name.zip" -DestinationPath $unpacked -Force
+          $inside = @(Get-ChildItem $unpacked -Recurse -File)
           if ($inside.Count -ne 1) { Write-Error "the zip holds more than the executable"; exit 1 }
+          Write-Host "the zip holds exactly one file: $($inside[0].Name)"
 
       - uses: actions/upload-artifact@v4
         with:
