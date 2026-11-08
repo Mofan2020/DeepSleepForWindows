@@ -570,3 +570,73 @@ def test_the_heartbeat_stays_good_only_for_a_short_while(monkeypatch, tmp_path):
         str(time.time() - install.HEARTBEAT_SECONDS - 1), encoding="utf-8"
     )
     assert install.agent_running() is False
+
+
+# ------------------------------------------------- stopping the processes
+
+
+def test_stopping_the_service_stops_the_processes(monkeypatch):
+    """Ending the task is not enough.
+
+    The program is a single file, and the process the task started can
+    outlive it.  The window would say the service is still running
+    after it was stopped.
+    """
+    from winsleep.core import install
+
+    stopped = []
+    monkeypatch.setattr(install, "task_exists", lambda _name: True)
+    monkeypatch.setattr(install, "stop_task", lambda _name: (True, "stopped"))
+    monkeypatch.setattr(install, "kill_processes", lambda command: stopped.append(command) or 1)
+
+    ok, detail = install.stop_daemon()
+    assert ok is True
+    assert "daemon" in stopped
+    assert "agent" in stopped
+
+
+def test_removing_the_service_stops_the_processes(monkeypatch):
+    from winsleep.core import install
+
+    stopped = []
+    monkeypatch.setattr(install, "task_exists", lambda _name: True)
+    monkeypatch.setattr(install, "stop_task", lambda _name: (True, "stopped"))
+    monkeypatch.setattr(install, "remove_task", lambda _name: (True, "removed"))
+    monkeypatch.setattr(install, "kill_processes", lambda command: stopped.append(command) or 1)
+
+    ok, detail = install.uninstall_all()
+    assert ok is True
+    assert "daemon" in stopped
+    assert "agent" in stopped
+
+
+def test_only_our_own_processes_are_stopped(monkeypatch):
+    """A process that only has the word "daemon" in its command line
+    belongs to somebody else.
+
+    It has to be our program and the sub command has to be the last
+    part of the command line.
+    """
+    from winsleep.core import install
+
+    class FakeProcess:
+        def __init__(self, cmdline):
+            self.info = {"cmdline": cmdline, "pid": 1}
+            self.terminated = False
+
+        def terminate(self):
+            self.terminated = True
+
+    ours = FakeProcess([r"C:\\Tools\\DeepSleep For Windows.exe", "daemon"])
+    theirs = FakeProcess([r"C:\\Other\\daemon.exe", "--daemon"])
+    not_ours = FakeProcess([r"C:\\Tools\\other.exe", "daemon"])
+
+    processes = [ours, theirs, not_ours]
+    monkeypatch.setattr(
+        "psutil.process_iter", lambda attrs=None: iter(processes)
+    )
+
+    assert install.kill_processes("daemon") == 1
+    assert ours.terminated is True
+    assert theirs.terminated is False
+    assert not_ours.terminated is False

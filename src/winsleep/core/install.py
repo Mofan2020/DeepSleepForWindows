@@ -152,6 +152,44 @@ def start_agent() -> tuple[bool, str]:
     return True, "the agent was started"
 
 
+def kill_processes(sub_command: str) -> int:
+    """Kill the processes that run one of our sub commands.
+
+    Ending the scheduled task is not enough: the program is a single
+    file, and the process that the task started can outlive it.  The
+    processes are found by their command line and stopped directly.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return 0
+
+    killed = 0
+    try:
+        for process in psutil.process_iter(["cmdline", "pid"]):
+            try:
+                cmdline = process.info.get("cmdline") or []
+                pid = process.info.get("pid")
+            except Exception:  # noqa: BLE001 - psutil raises many things
+                continue
+            if not cmdline or pid is None:
+                continue
+            # The last part of the command line is the sub command.
+            if not any(part.lower() == sub_command for part in cmdline[-1:]):
+                continue
+            # Only our own program is stopped.
+            if not any("DeepSleep" in part for part in cmdline):
+                continue
+            try:
+                process.terminate()
+                killed += 1
+            except Exception:  # noqa: BLE001 - it may already be gone
+                continue
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not stop the processes: %s", exc)
+    return killed
+
+
 def stop_task(name: str) -> tuple[bool, str]:
     """Stop a running task."""
     result = _run(["schtasks", "/End", "/TN", name])
@@ -195,6 +233,19 @@ def uninstall_all() -> tuple[bool, str]:
             stop_task(name)
             remove_task(name)
             messages.append(f"{name} was removed")
+
+    # The processes are stopped as well.  Removing the task does not
+    # stop a process that is already running.
+    for command in ("daemon", "agent"):
+        killed = kill_processes(command)
+        if killed:
+            messages.append(f"{killed} {command} process(es) were stopped")
+
+    try:
+        heartbeat_path().unlink(missing_ok=True)
+    except OSError:
+        pass
+
     if not messages:
         return True, "nothing was installed"
     return True, ", ".join(messages)
@@ -316,6 +367,14 @@ def stop_daemon() -> tuple[bool, str]:
         if task_exists(name):
             stop_task(name)
             messages.append(f"{name} was stopped")
+
+    # The processes themselves are stopped as well.  Ending the task
+    # is not enough: the program is a single file, and the process
+    # can outlive the task that started it.
+    for command in ("daemon", "agent"):
+        killed = kill_processes(command)
+        if killed:
+            messages.append(f"{killed} {command} process(es) were stopped")
 
     # The heartbeat is taken away as well.  Without this the window
     # would say the agent is still running for a while after it was
