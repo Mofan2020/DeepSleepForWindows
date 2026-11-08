@@ -84,7 +84,7 @@ def test_the_running_processes_can_be_looked_up():
     assert isinstance(running, set)
 
 
-def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
+def _run_cli(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     """Run the command line in a child process.
 
     The package lives under ``src/`` and is not installed, so the path
@@ -93,9 +93,11 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     """
     import os
 
-    env = dict(os.environ)
+    child_env = dict(os.environ)
     src = str(Path(__file__).resolve().parent.parent / "src")
-    env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
+    child_env["PYTHONPATH"] = src + os.pathsep + child_env.get("PYTHONPATH", "")
+    if env:
+        child_env.update(env)
     return subprocess.run(
         [sys.executable, "-m", "winsleep.cli", *args],
         capture_output=True,
@@ -103,7 +105,7 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
         encoding="utf-8",
         errors="replace",
         check=False,
-        env=env,
+        env=child_env,
     )
 
 
@@ -174,3 +176,28 @@ class TestSwitchingByName:
         ok, detail = winpower.set_active_plan("no such plan at all")
         assert not ok
         assert "no such plan" in detail.lower()
+
+
+class TestALegacyCodePage:
+    """The console code page must not decide whether the program runs.
+
+    The power plan names are the ones Windows shows, so they are in the
+    language of the machine.  An English Windows has a cp1252 console,
+    a Chinese one has something else, and neither can be relied on.
+    """
+
+    def test_the_plans_command_survives_a_legacy_code_page(self):
+        result = _run_cli("plans", env={"PYTHONIOENCODING": "cp1252"})
+        assert result.returncode == 0, result.stderr
+
+    def test_the_status_command_survives_a_legacy_code_page(self):
+        result = _run_cli("status", env={"PYTHONIOENCODING": "cp1252"})
+        assert result.returncode == 0, result.stderr
+
+    def test_the_version_survives_a_legacy_code_page(self):
+        result = _run_cli("--version", env={"PYTHONIOENCODING": "cp1252"})
+        assert result.returncode == 0, result.stderr
+
+    def test_the_help_survives_a_legacy_code_page(self):
+        result = _run_cli(env={"PYTHONIOENCODING": "cp1252"})
+        assert result.returncode == 1

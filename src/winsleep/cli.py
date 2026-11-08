@@ -27,6 +27,28 @@ from .core import paths, winapi, winpower
 from .version import APP_NAME, DISPLAY_NAME, __version__
 
 
+def _use_utf8_output() -> None:
+    """Make stdout and stderr UTF-8, whatever the console code page is.
+
+    The power plan names are the ones Windows shows, so they are in the
+    language of the machine.  A Windows console running an English code
+    page (cp1252) cannot encode them, and the program would die on the
+    first print with a UnicodeEncodeError.  The same happens on a
+    Chinese machine with a legacy code page and a different character
+    set, so the code page cannot be trusted at all.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (OSError, ValueError):
+            # A stream that does not want to be reconfigured is not a
+            # reason to refuse to run.
+            pass
+
+
 def _setup_logging(verbose: bool) -> None:
     root = logging.getLogger("winsleep")
     root.setLevel(logging.DEBUG if verbose else logging.INFO)
@@ -152,6 +174,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # This has to happen before anything is printed, including the
+    # help text, because the plan names are in the language of the
+    # machine and the console may not be able to encode them.
+    _use_utf8_output()
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "func", None):

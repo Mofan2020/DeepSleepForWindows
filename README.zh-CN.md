@@ -130,6 +130,22 @@ Windows 构建用 PyInstaller，配置见 `main.spec`。
 - 会注入模拟输入的远控软件（AnyDesk 之类）会让系统看起来一直很忙。DeepSleep For Windows 的规则可以绕开这点 —— 用 `process_running` 条件代替空闲条件。
 - 守护进程每次检查都会重新读实际的电源计划，跟期望值对不上就立刻改回来。别的程序（比如 Process Lasso）抢电源计划时，日志里会写出来。
 
+## 签名
+
+发布的 `.exe` 是用代码签名证书签过的，带 DigiCert 的 RFC 3161 时间戳，所以证书到期后签名依然有效。
+
+签名用的是私有 CA（ServBay User CA），Windows 默认不信任它，所以第一次运行时可能提示「未知发布者」。把仓库里的 `certificates/ServBay-User-CA-ECC-Root.crt` 装进「受信任的根证书颁发机构」就不会提示了：
+
+```bat
+certutil -addstore Root certificates\ServBay-User-CA-ECC-Root.crt
+```
+
+装之前可以先看一眼证书的指纹，确认是自己那份：
+
+```bat
+certutil -dump certificates\ServBay-User-CA-ECC-Root.crt
+```
+
 ## 协议
 
 MIT，见 [LICENSE](./LICENSE)。

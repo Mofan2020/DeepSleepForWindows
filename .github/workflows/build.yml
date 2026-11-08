@@ -73,6 +73,46 @@ jobs:
       - name: Build the executable
         run: pyinstaller --clean --noconfirm main.spec
 
+      # The signing certificate lives in the repository secrets as a
+      # base64 PKCS#12 file.  The private key is never in the repository
+      # and never in the artifact.
+      - name: Sign the executable
+        shell: pwsh
+        env:
+          CERT_PFX_BASE64: ${{ secrets.SIGNING_CERT_PFX_BASE64 }}
+          CERT_PFX_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
+        run: |
+          if (-not $env:CERT_PFX_BASE64) {
+            Write-Host "no signing certificate in the secrets; the build is not signed"
+            exit 0
+          }
+          # The certificate is issued by a private CA, so the runner has
+          # to trust its root before the signature can be verified.
+          Import-Certificate -FilePath "certificates\ServBay-User-CA-ECC-Root.crt" `
+            -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+          $pfx = Join-Path $env:RUNNER_TEMP "signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERT_PFX_BASE64))
+          # signtool ships with the Windows SDK.  It is normally on the
+          # PATH of the runner, but it is looked for explicitly so a
+          # runner image without it fails with a clear message.
+          $signtool = (Get-Command signtool.exe -ErrorAction SilentlyContinue).Source
+          if (-not $signtool) {
+            $signtool = (Get-ChildItem "C:\Program Files (x86)\Windows Kits\10\bin" `
+              -Recurse -Filter signtool.exe -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match "x64" } |
+              Select-Object -First 1).FullName
+          }
+          if (-not $signtool) { Write-Error "signtool.exe was not found"; exit 1 }
+          Write-Host "using $signtool"
+          & $signtool sign /f $pfx /p $env:CERT_PFX_PASSWORD /fd SHA256 `
+            /tr http://timestamp.digicert.com /td SHA256 `
+            "dist\DeepSleepForWindows.exe"
+          if ($LASTEXITCODE -ne 0) { Write-Error "signing failed"; exit 1 }
+          # The certificate is not part of the build; delete it again.
+          Remove-Item $pfx -Force
+          & $signtool verify /pa /v "dist\DeepSleepForWindows.exe"
+          if ($LASTEXITCODE -ne 0) { Write-Error "the signature does not verify"; exit 1 }
+
       - name: Smoke test the executable
         shell: pwsh
         run: |

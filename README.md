@@ -151,6 +151,26 @@ The Windows build is a PyInstaller bundle; see `main.spec`.
   remote tools) keeps the system looking busy. DeepSleep For Windows's own rules can work
   around that by using a `process_running` condition instead of an idle one.
 
+## Signing
+
+The released `.exe` is signed with a code signing certificate and carries a
+DigiCert RFC 3161 timestamp, so the signature stays valid after the
+certificate expires.
+
+The certificate is issued by a private CA (ServBay User CA), which Windows does
+not trust by default, so the first run may say "Unknown publisher". Install the
+root certificate from the repository to get rid of that:
+
+```bat
+certutil -addstore Root certificates\ServBay-User-CA-ECC-Root.crt
+```
+
+Have a look at the fingerprint before you install it:
+
+```bat
+certutil -dump certificates\ServBay-User-CA-ECC-Root.crt
+```
+
 ## License
 
 MIT. See [LICENSE](./LICENSE).
