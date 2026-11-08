@@ -199,9 +199,88 @@ def run_tests() -> subprocess.CompletedProcess[str]:
     )
 
 
+#: The state of the source files before the last run.  A run that was
+#: killed leaves the files in a state that is not in here, and that is
+#: how the leftovers are found.
+STATE_FILE = ROOT / ".mutation-state.json"
+
+
+def source_hashes() -> dict[str, str]:
+    """The hash of every source file."""
+    import hashlib
+
+    hashes = {}
+    for path in sorted(SRC.rglob("*.py")):
+        hashes[str(path.relative_to(ROOT))] = hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()
+    return hashes
+
+
+def find_leftovers() -> list[str]:
+    """Look for mutations that a killed run left behind.
+
+    A run that is killed hard - the machine goes down, the terminal is
+    closed - cannot put the original code back.  The leftover looks
+    like perfectly normal code: one number that is wrong.  Nobody
+    notices until a test fails for no reason.
+
+    The state of the files is written down before the run and compared
+    with it the next time the script starts.  A file that does not
+    match is one that was changed and not put back.
+    """
+    import hashlib
+    import json
+
+    if not STATE_FILE.exists():
+        return []
+
+    try:
+        before = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+
+    leftovers = []
+    for path in sorted(SRC.rglob("*.py")):
+        key = str(path.relative_to(ROOT))
+        expected = before.get(key)
+        if expected is None:
+            continue
+        actual = hashlib.sha256(path.read_bytes()).hexdigest()
+        if actual != expected:
+            leftovers.append(key)
+    return leftovers
+
+
+def remember_state() -> None:
+    """Write down the state of the files for the next run."""
+    import json
+
+    try:
+        STATE_FILE.write_text(
+            json.dumps(source_hashes(), indent=2), encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
 def main() -> int:
     failures: list[str] = []
     survived: list[str] = []
+
+    leftovers = find_leftovers()
+    if leftovers:
+        print("a run was killed before it could put the code back.")
+        print("these files still have a mutation in them:")
+        for path in leftovers:
+            print(f"  - {path}")
+        print()
+        print("put them back with: git checkout src/winsleep")
+        return 2
+
+    # The state is written down before anything is changed, so a run
+    # that is killed can be found the next time.
+    remember_state()
 
     for name, path, original, broken in MUTATIONS:
         source = path.read_text(encoding="utf-8")

@@ -203,43 +203,93 @@ def uninstall_all() -> tuple[bool, str]:
 # ------------------------------------------------------------------ service
 
 
-def _matching_processes(wanted: str, unwanted: tuple[str, ...] = ()) -> bool:
-    """True when a process of ours is running with *wanted* in its command.
+# The agent writes the time it was last alive into this file.  It is
+# the only proof that the agent is running, because the agent has no
+# port of its own.
+AGENT_HEARTBEAT = "agent.alive"
 
-    The command line of a frozen build is the path of the executable
-    plus the sub command, so the sub command is what tells the daemon
-    and the agent apart.
-    """
+# How long a heartbeat stays good.  The agent writes it every few
+# seconds, so a minute is generous.
+HEARTBEAT_SECONDS = 60
+
+
+def heartbeat_path():
+    """The file the agent writes its heartbeat into."""
+    from . import paths
+
+    return paths.app_dir() / AGENT_HEARTBEAT
+
+
+def write_heartbeat() -> None:
+    """Say that the agent is alive."""
+    import time
+
     try:
-        import psutil
-    except ImportError:
+        path = heartbeat_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(time.time()), encoding="utf-8")
+    except OSError as exc:
+        log.debug("could not write the heartbeat: %s", exc)
+
+
+def _heartbeat_is_fresh() -> bool:
+    """True when the agent wrote its heartbeat recently enough."""
+    import time
+
+    try:
+        stamp = float(heartbeat_path().read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False
+    return (time.time() - stamp) < HEARTBEAT_SECONDS
+
+
+def _daemon_answers() -> bool:
+    """True when the daemon answers on its port."""
+    import json
+    import socket
+
+    from . import paths
+
+    try:
+        port = int(paths.socket_path().read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
         return False
 
     try:
-        for process in psutil.process_iter(["cmdline"]):
-            try:
-                cmdline = process.info.get("cmdline") or []
-            except Exception:  # noqa: BLE001 - psutil raises many things
-                continue
-            joined = " ".join(cmdline).lower()
-            if wanted not in joined:
-                continue
-            if any(word in joined for word in unwanted):
-                continue
-            return True
-    except Exception as exc:  # noqa: BLE001
-        log.warning("could not look at the processes: %s", exc)
-    return False
+        with socket.create_connection(("127.0.0.1", port), timeout=2) as conn:
+            conn.sendall(json.dumps({"kind": "ping"}).encode("utf-8") + b"\n")
+            conn.settimeout(2)
+            reply = conn.recv(4096)
+    except OSError:
+        return False
+
+    if not reply:
+        return False
+    try:
+        return bool(json.loads(reply.decode("utf-8").splitlines()[0]).get("ok"))
+    except (ValueError, json.JSONDecodeError):
+        return False
 
 
 def daemon_running() -> bool:
-    """True when the daemon is running right now."""
-    return _matching_processes("daemon", unwanted=("agent",))
+    """True when the daemon is running right now.
+
+    The daemon listens on a local port, so the honest way to ask is to
+    talk to it.  Looking for a process with "daemon" in its command
+    line gave the wrong answer: the word can be anywhere, and it said
+    yes while nothing was running.
+    """
+    return _daemon_answers()
 
 
 def agent_running() -> bool:
-    """True when the agent is running right now."""
-    return _matching_processes("agent")
+    """True when the agent is running right now.
+
+    The agent writes a heartbeat file while it is alive.  The file is
+    only there when the agent is running, so there is nothing to guess
+    about.
+    """
+    return _heartbeat_is_fresh()
 
 
 def service_installed() -> bool:

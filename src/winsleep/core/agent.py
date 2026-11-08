@@ -22,7 +22,7 @@ import socket
 import sys
 import time
 
-from . import paths, winapi
+from . import install, paths, winapi
 
 log = logging.getLogger("winsleep.agent")
 
@@ -101,6 +101,9 @@ def run_forever() -> None:
 
     log.info("the agent is reporting to 127.0.0.1:%d", port)
     while True:
+        # Say that the agent is alive.  Without this there is no way
+        # to tell a running agent from one that stopped.
+        install.write_heartbeat()
         idle = winapi.idle_seconds()
         if idle < 0:
             log.warning("could not read the idle time")

@@ -450,3 +450,82 @@ def test_the_doctor_is_happy_when_everything_is_in_place(monkeypatch, capsys):
 
     out = capsys.readouterr().out
     assert "everything is in place" in out
+
+
+# --------------------------------------------------- how the service is seen
+
+
+def test_the_daemon_is_only_running_when_it_answers(monkeypatch):
+    """Looking for the word "daemon" in a command line is not proof.
+
+    It said the daemon was running while nothing was running at all.
+    The daemon listens on a port, so it is asked instead.
+    """
+    from winsleep.core import install
+
+    monkeypatch.setattr(install, "_daemon_answers", lambda: False)
+    assert install.daemon_running() is False
+
+    monkeypatch.setattr(install, "_daemon_answers", lambda: True)
+    assert install.daemon_running() is True
+
+
+def test_the_agent_is_only_running_when_its_heartbeat_is_fresh(monkeypatch, tmp_path):
+    """The agent writes a heartbeat while it is alive.
+
+    A heartbeat that is too old means the agent stopped, even though
+    the file is still there.
+    """
+    import time
+
+    from winsleep.core import install
+
+    monkeypatch.setattr(install, "heartbeat_path", lambda: tmp_path / "agent.alive")
+
+    assert install.agent_running() is False
+
+    install.write_heartbeat()
+    assert install.agent_running() is True
+
+    # An old heartbeat means the agent stopped.
+    (tmp_path / "agent.alive").write_text(str(time.time() - 3600), encoding="utf-8")
+    assert install.agent_running() is False
+
+
+def test_the_heartbeat_is_written_where_the_program_looks(monkeypatch, tmp_path):
+    from winsleep.core import install
+
+    monkeypatch.setattr(install, "heartbeat_path", lambda: tmp_path / "agent.alive")
+    install.write_heartbeat()
+    assert (tmp_path / "agent.alive").exists()
+
+
+def test_a_console_keeps_its_own_code_page(monkeypatch):
+    """The console knows its own code page.
+
+    A Chinese machine writes GBK into a GBK console.  Forcing UTF-8
+    there makes the characters unreadable, so the encoding is only
+    changed when the console really cannot hold the plan names.
+    """
+    from winsleep import cli
+
+    class FakeStream:
+        """A stream that only says what its encoding is."""
+
+        def __init__(self, encoding):
+            self.encoding = encoding
+            self.reconfigured = None
+
+        def reconfigure(self, **kwargs):
+            self.reconfigured = kwargs
+
+    gbk = FakeStream("gbk")
+    monkeypatch.setattr(cli.sys, "stdout", gbk)
+    cli._use_utf8_output()
+    assert gbk.reconfigured["encoding"] == "gbk"
+
+    # A console that cannot hold the names gets UTF-8 instead.
+    ascii_stream = FakeStream("ascii")
+    monkeypatch.setattr(cli.sys, "stdout", ascii_stream)
+    cli._use_utf8_output()
+    assert ascii_stream.reconfigured["encoding"] == "utf-8"

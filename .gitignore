@@ -23,3 +23,6 @@ htmlcov/
 .idea/
 .vscode/
 *.swp
+
+# The state of the mutation test run, not part of the project.
+.mutation-state.json

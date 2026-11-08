@@ -82,21 +82,32 @@ def _show_error(reason: str) -> None:
 
 
 def _use_utf8_output() -> None:
-    """Make stdout and stderr UTF-8, whatever the console code page is.
+    """Make sure printing the plan names cannot kill the program.
 
     The power plan names are the ones Windows shows, so they are in the
-    language of the machine.  A Windows console running an English code
-    page (cp1252) cannot encode them, and the program would die on the
-    first print with a UnicodeEncodeError.  The same happens on a
-    Chinese machine with a legacy code page and a different character
-    set, so the code page cannot be trusted at all.
+    language of the machine.  A console that cannot encode them would
+    make the program die on the first print with a UnicodeEncodeError.
+
+    The console keeps its own code page: a Chinese machine writes GBK
+    into a GBK console and reads it back correctly, while forcing UTF-8
+    there makes the characters unreadable.  So the encoding is only
+    changed when the current one really cannot hold the text.
     """
     for stream in (sys.stdout, sys.stderr):
         reconfigure = getattr(stream, "reconfigure", None)
         if reconfigure is None:
             continue
+
+        encoding = getattr(stream, "encoding", None) or "utf-8"
         try:
-            reconfigure(encoding="utf-8", errors="replace")
+            "平衡 高性能".encode(encoding)
+        except (LookupError, UnicodeEncodeError):
+            # The console cannot hold the names of the power plans.
+            # UTF-8 with a replacement is better than dying.
+            encoding = "utf-8"
+
+        try:
+            reconfigure(encoding=encoding, errors="replace")
         except (OSError, ValueError):
             # A stream that does not want to be reconfigured is not a
             # reason to refuse to run.
