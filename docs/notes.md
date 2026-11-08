@@ -72,6 +72,20 @@ powershell -ExecutionPolicy Bypass -File D:\skyc8266\dev\build.ps1
 
 **PyInstaller 不能在 `C:\Windows\Temp` 下运行** —— 报 `Do not run pyinstaller from C:\Windows\Temp`，源码要放在正常的目录里。
 
+**用 conda 的 Python 打包时，`Library\bin` 必须在 PATH 上。**
+
+那台机器的 Python 是 Anaconda 的 3.13.9。它的 `_ctypes.pyd` 和 `_ssl.pyd` 动态依赖 `Library\bin` 里的 `ffi-8.dll`、`libcrypto-3-x64.dll`、`libssl-3-x64.dll`——conda 只在自己运行时用 `os.add_dll_directory` 把那个目录加进搜索路径，PyInstaller 分析依赖时是从 PATH 上找 DLL 的，所以它找不到，打出来的包会在 `import ctypes` 时报 `DLL load failed while importing _ctypes`。
+
+`build.ps1` 里加了：
+
+```powershell
+$env:PATH = "$anaconda\Library\bin;$anaconda;$anaconda\Scripts;" + $env:PATH
+```
+
+PyInstaller 只会收**真正被 import 的**那些 DLL，不会把那个目录里 454 个 DLL（1.3 GB）都塞进去。
+
+另一条路是把 `Library\bin` 下的 DLL 显式列进 spec 的 `binaries`，但那样每个 Anaconda 版本的名字都不一样（`ffi-8.dll`、`libffi-7.dll`……），不如改 PATH。
+
 那台机器的 Python 是 Anaconda：`D:\skyc8266\dev\env\anaconda3\python.exe`。`where python` 的第一顺位就是它，但 `C:\Program Files\python` 也装了一个，脚本里用 `python` 时要留意是哪个。
 
 
