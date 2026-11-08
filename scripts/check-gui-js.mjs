@@ -21,8 +21,12 @@ const source = fs.readFileSync(path.join(assets, 'app.js'), 'utf8');
  * the file as they are, so a change in app.js changes the test. */
 function extract(name) {
   const marker = `function ${name}(`;
-  const start = source.indexOf(marker);
-  if (start < 0) throw new Error(`${name} was not found in app.js`);
+  const found = source.indexOf(marker);
+  if (found < 0) throw new Error(`${name} was not found in app.js`);
+  // An async function has to keep its keyword, or the await inside
+  // it is a syntax error.
+  const before = source.slice(Math.max(0, found - 6), found);
+  const start = before.endsWith('async ') ? found - 6 : found;
   // Walk the braces to find the end of the function.
   let depth = 0;
   let index = source.indexOf('{', start);
@@ -47,6 +51,12 @@ const code = [
   extract('setIfIdle'),
   extract('conditionValue'),
   extract('formatIdle'),
+  extract('fillPlanSelect'),
+  extract('renderRules'),
+  extract('renderGames'),
+  extract('renderService'),
+  extract('serviceButton'),
+  extract('refresh'),
 ].join('\n\n');
 
 /* A field is what the function works on: it has a value and a dataset.
@@ -65,15 +75,26 @@ const { setIfIdle, conditionValue, formatIdle } = context.__out;
 let passed = 0;
 let failed = 0;
 
+/* A test can be async, so the checks are collected first and run
+ * afterwards.  That way a rejected promise counts as a failure and
+ * not as a crash. */
+const checks = [];
+
 function test(name, fn) {
-  try {
-    fn();
-    passed += 1;
-    console.log(`ok    ${name}`);
-  } catch (err) {
-    failed += 1;
-    console.log(`FAIL  ${name}`);
-    console.log(`      ${err.message}`);
+  checks.push({ name, fn });
+}
+
+async function run() {
+  for (const { name, fn } of checks) {
+    try {
+      await fn();
+      passed += 1;
+      console.log(`ok    ${name}`);
+    } catch (err) {
+      failed += 1;
+      console.log(`FAIL  ${name}`);
+      console.log(`      ${err && err.message ? err.message : err}`);
+    }
   }
 }
 
@@ -140,6 +161,165 @@ test('an empty value is no condition', () => {
   assert.strictEqual(conditionValueOf('idle_at_least', ''), '');
 });
 
+/* A field is what the interface works on.  It has a value, a text, a
+ * dataset and a class - everything the code touches. */
+function element(extra) {
+  return Object.assign(
+    {
+      value: '',
+      textContent: '',
+      className: '',
+      dataset: {},
+      checked: false,
+      options: [],
+      innerHTML: '',
+      appendChild() {},
+    },
+    extra || {},
+  );
+}
+
+/* The refresh reads a lot of fields.  This hands out one for every
+ * name, so the test does not have to know them all. */
+function elementSet() {
+  const fields = {};
+  return {
+    fields,
+    get(id) {
+      if (!fields[id]) fields[id] = element();
+      return fields[id];
+    },
+  };
+}
+
+/* Run the real refresh out of app.js. */
+async function runRefresh(getState) {
+  const set = elementSet();
+  const scope = vm.createContext({
+    ...context,
+    $: (id) => set.get(id),
+    api: () => ({ get_state: getState, service_status: () => Promise.resolve(null) }),
+    document: {
+      activeElement: null,
+      createElement: () => element(),
+    },
+    setTimeout,
+    clearTimeout,
+  });
+  vm.runInContext(`${code}\nthis.__refresh = refresh;`, scope);
+  try {
+    await vm.runInContext('this.__refresh()', scope);
+  } catch (err) {
+    // The refresh has to handle a backend that is not there.  If it
+    // does not, this is the failure the test is looking for.
+    return set.fields;
+  }
+  return set.fields;
+}
+
+test('a refresh that cannot reach the backend says so', async () => {
+  // The window refreshes every five seconds.  When the backend is not
+  // there, the window has to say so - otherwise it sits on
+  // "checking" forever and looks broken.
+  const fields = await runRefresh(() => Promise.reject(new Error('no backend')));
+  assert.match(fields.serviceText.textContent, /连不上后台/);
+  assert.strictEqual(fields.daemonState.textContent, '连不上后台');
+  assert.strictEqual(fields.statusDot.className, 'dot off');
+});
+
+test('a refresh that works shows the state', async () => {
+  const fields = await runRefresh(() =>
+    Promise.resolve({
+      config: {
+        idle_seconds: 600,
+        idle_cpu_percent: 15,
+        idle_plan: '节能',
+        active_plan: '平衡',
+        server_mode: false,
+        keep_awake: false,
+        rules: [],
+        game_processes: [],
+      },
+      plans: ['节能', '平衡'],
+      plan_guids: ['a', 'b'],
+      active_plan: '平衡',
+      active_plan_guid: 'b',
+      daemon_running: true,
+      idle_seconds: 42,
+    }),
+  );
+  assert.strictEqual(fields.currentPlan.textContent, '平衡');
+  assert.strictEqual(fields.daemonState.textContent, '后台服务运行中');
+  assert.strictEqual(fields.statusDot.className, 'dot on');
+  assert.strictEqual(fields.idleMinutes.value, 10);
+  assert.strictEqual(fields.idleCpu.value, 15);
+});
+
+test('a service button that fails says what went wrong', async () => {
+  // The action can fail in two ways: it can answer with a failure, or
+  // it can throw.  Both have to end up on the screen, otherwise the
+  // button says "working on it" and nothing else happens.
+  const set = elementSet();
+  const scope = vm.createContext({
+    ...context,
+    $: (id) => set.get(id),
+    api: () => ({ get_state: () => Promise.resolve({ config: {}, plans: [], plan_guids: [] }) }),
+    document: { activeElement: null, createElement: () => element() },
+    setTimeout,
+    clearTimeout,
+  });
+  vm.runInContext(`${code}\nthis.__serviceButton = serviceButton;`, scope);
+
+  // A button that remembers its click handler.
+  const created = [];
+  scope.document.createElement = () => {
+    const node = element({
+      addEventListener(type, fn) {
+        if (type === 'click') this.__onClick = fn;
+      },
+    });
+    created.push(node);
+    return node;
+  };
+
+  const button = vm.runInContext(
+    'this.__serviceButton("安装并启动", () => { throw new Error("the task could not be created"); }, true)',
+    scope,
+  );
+  await button.__onClick();
+
+  assert.match(set.get('serviceHint').textContent, /the task could not be created/);
+  assert.strictEqual(set.get('serviceHint').className, 'hint bad');
+});
+
+test('a service button that fails with a result says what went wrong', async () => {
+  const set = elementSet();
+  const scope = vm.createContext({
+    ...context,
+    $: (id) => set.get(id),
+    api: () => ({ get_state: () => Promise.resolve({ config: {}, plans: [], plan_guids: [] }) }),
+    document: { activeElement: null, createElement: () => element() },
+    setTimeout,
+    clearTimeout,
+  });
+  vm.runInContext(`${code}\nthis.__serviceButton = serviceButton;`, scope);
+  scope.document.createElement = () =>
+    element({
+      addEventListener(type, fn) {
+        if (type === 'click') this.__onClick = fn;
+      },
+    });
+
+  const button = vm.runInContext(
+    'this.__serviceButton("安装并启动", () => Promise.resolve({ ok: false, message: "schtasks failed" }), true)',
+    scope,
+  );
+  await button.__onClick();
+
+  assert.strictEqual(set.get('serviceHint').textContent, 'schtasks failed');
+  assert.strictEqual(set.get('serviceHint').className, 'hint bad');
+});
+
 test('the idle time is shown in a readable way', () => {
   assert.strictEqual(formatIdle(30), '30 秒');
   assert.strictEqual(formatIdle(90), '1 分 30 秒');
@@ -148,6 +328,8 @@ test('the idle time is shown in a readable way', () => {
 });
 
 /* ------------------------------------------------------------- report */
+
+await run();
 
 console.log('');
 console.log(`${passed}/${passed + failed} checks passed`);

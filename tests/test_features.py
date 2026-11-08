@@ -402,3 +402,51 @@ def test_the_interface_javascript_passes_its_own_checks():
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+# ------------------------------------------------------------ the doctor
+
+
+def test_the_doctor_says_what_is_missing(monkeypatch, capsys):
+    """The doctor command tells the user what is not set up.
+
+    It is the first thing to run when something does not work, so it
+    has to say which part is missing rather than only that something
+    is.
+    """
+    from winsleep import cli
+
+    monkeypatch.setattr(
+        "winsleep.core.install.service_status",
+        lambda: {"installed": False, "running": False, "agent_running": False},
+    )
+
+    def no_daemon(_self, _message):
+        return None
+
+    monkeypatch.setattr("winsleep.gui.bridge.Bridge._daemon_request", no_daemon)
+
+    assert cli._cmd_doctor(None) == 1
+
+    out = capsys.readouterr().out
+    assert "installed:" in out
+    assert "answering:" in out
+    assert "something is missing" in out
+
+
+def test_the_doctor_is_happy_when_everything_is_in_place(monkeypatch, capsys):
+    from winsleep import cli
+
+    monkeypatch.setattr(
+        "winsleep.core.install.service_status",
+        lambda: {"installed": True, "running": True, "agent_running": True},
+    )
+    monkeypatch.setattr(
+        "winsleep.gui.bridge.Bridge._daemon_request",
+        lambda self, message: {"ok": True, "kind": "pong"},
+    )
+
+    assert cli._cmd_doctor(None) == 0
+
+    out = capsys.readouterr().out
+    assert "everything is in place" in out

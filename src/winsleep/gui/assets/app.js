@@ -485,7 +485,14 @@ function serviceButton(label, action, primary) {
   button.addEventListener('click', async () => {
     button.disabled = true;
     button.textContent = '处理中…';
-    const result = await action();
+    let result = null;
+    try {
+      result = await action();
+    } catch (err) {
+      // A failure that is not a result - the window would keep saying
+      // "working on it" and never come back.
+      result = { ok: false, message: '出错了：' + (err && err.message ? err.message : err) };
+    }
     button.disabled = false;
     if (result && result.message) {
       $('serviceHint').textContent = result.message;
@@ -539,7 +546,22 @@ function renderService(service) {
 /* ------------------------------------------------------------- refresh */
 
 async function refresh() {
-  const data = await api().get_state();
+  let data;
+  try {
+    data = await api().get_state();
+  } catch (err) {
+    // The window has to say something when the bridge is not there.
+    // Without this it would sit on "checking" forever.
+    const text = $('serviceText');
+    if (text) {
+      text.textContent = '连不上后台：' + (err && err.message ? err.message : err);
+      $('serviceHint').textContent = '';
+    }
+    $('daemonState').textContent = '连不上后台';
+    const dot = $('statusDot');
+    if (dot) dot.className = 'dot off';
+    return;
+  }
   state = data;
   const config = data.config || {};
 

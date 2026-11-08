@@ -262,6 +262,63 @@ def _cmd_selftest(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_doctor(_args: argparse.Namespace) -> int:
+    """Check that the program is set up the way it should be.
+
+    The window can only work when the daemon is running and both of
+    them look in the same directory.  This command says which of those
+    is missing, so a broken setup can be seen without guessing.
+    """
+    from .core import install, paths
+    from .gui.bridge import Bridge
+
+    print(f"version:      {__version__}")
+    print(f"directory:    {paths.app_dir()}")
+    print(f"settings:     {paths.config_path()}")
+    print(f"log:          {paths.log_path()}")
+
+    print("")
+    print("the background service:")
+    try:
+        status = install.service_status()
+    except Exception as exc:  # noqa: BLE001 - the reason has to show
+        print(f"  could not be read: {exc}")
+        status = {}
+    print(f"  installed:   {status.get('installed')}")
+    print(f"  running:     {status.get('running')}")
+    print(f"  agent:       {status.get('agent_running')}")
+
+    print("")
+    print("the daemon:")
+    bridge = Bridge()
+    state = bridge.get_state()
+    print(f"  answering:   {state.get('daemon_running')}")
+    print(f"  power plan:  {state.get('active_plan')}")
+    print(f"  idle time:   {state.get('idle_seconds')} s")
+
+    print("")
+    print("the settings:")
+    cfg = state.get("config") or {}
+    print(f"  idle after:  {cfg.get('idle_seconds')} s")
+    print(f"  cpu below:   {cfg.get('idle_cpu_percent')} %")
+    print(f"  idle plan:   {cfg.get('idle_plan') or '(not set)'}")
+    print(f"  active plan: {cfg.get('active_plan') or '(not set)'}")
+    print(f"  server mode: {cfg.get('server_mode')}")
+    print(f"  keep awake:  {cfg.get('keep_awake')}")
+
+    print("")
+    print(f"plans: {len(state.get('plans') or [])}")
+    for name, guid in zip(
+        state.get("plans") or [], state.get("plan_guids") or [], strict=False
+    ):
+        print(f"  {name}  {guid}")
+
+    print("")
+    ok = bool(state.get("daemon_running")) and bool(status.get("installed"))
+    print("everything is in place" if ok else "something is missing - see above")
+    return 0 if ok else 1
+
+
 def _cmd_lock(_args: argparse.Namespace) -> int:
     ok = winapi.lock_workstation()
     print("the screen was locked" if ok else "error: could not lock the screen")
@@ -296,6 +353,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "selftest", help="check that the bundle is complete"
     ).set_defaults(func=_cmd_selftest)
+
+    sub.add_parser(
+        "doctor", help="check that everything is set up the way it should be"
+    ).set_defaults(func=_cmd_doctor)
 
     sleep = sub.add_parser("sleep", help="put the machine to sleep now")
     sleep.add_argument(
