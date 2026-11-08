@@ -106,6 +106,20 @@ python scripts/mutation_test.py
 
 **传大文件不要走 base64 + 命令行。** 命令行长度上限会把文件截断成 0 字节，而且**不报错**——远端 `certutil` 才报 `ERROR_FILE_INVALID`。长内容用 tar 管道。
 
+## 签名
+
+用的证书是 `Skyc8266.crt`（带 Code Signing EKU，ECC P-384，有效期到 2029-01-12），由 ServBay User CA 签发。
+
+几件实测出来的事：
+
+- **ECC 在 Authenticode 上是可行的。** 以前以为 Windows 只认 RSA 的代码签名证书，实测 `signtool sign` + `signtool verify /pa` 都通过。Windows 10 1809 之后支持 ECC。
+- **`certutil -user -addstore Root` 装不进去**，报 `ERROR_NOT_SUPPORTED`。装到 `LocalMachine\Root` 可以（需要管理员）。装根证书时优先用 `Import-Certificate -CertStoreLocation Cert:\LocalMachine\Root`。
+- **没有根证书时 `verify /pa` 报 `0x800B010A`**（`CERT_E_UNTRUSTEDROOT`）。这就是「未知发布者」的来源。装了根证书就通过。
+- **时间戳要用 `/tr http://timestamp.digicert.com /td SHA256`**，DigiCert 的 RFC 3161 时间戳响应器接受 ECC 证书链。
+
+CI 里的做法：证书以 base64 的 PKCS#12 存在 repository secrets 里，签名前把 `certificates/` 里的根证书装进 runner 的信任库，签完 `verify /pa` 验一遍，然后把 PFX 文件删掉。私钥不进仓库、不进产物。
+
+
 ## 没做的部分
 
 - **没有做工具箱。** 用户明确说不要。
