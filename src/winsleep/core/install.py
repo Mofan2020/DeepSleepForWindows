@@ -63,8 +63,13 @@ def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
     (no ``schtasks`` off Windows) comes back as a failed result rather
     than an exception.
     """
+    creationflags = 0
+    if sys.platform == "win32":
+        creationflags = 0x08000000  # subprocess.CREATE_NO_WINDOW
     try:
-        result = subprocess.run(args, capture_output=True, check=False)
+        result = subprocess.run(
+            args, capture_output=True, check=False, creationflags=creationflags
+        )
     except (FileNotFoundError, PermissionError, OSError):
         return subprocess.CompletedProcess(args, returncode=127, stdout="", stderr="")
 

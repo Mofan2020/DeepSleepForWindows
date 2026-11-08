@@ -17,6 +17,7 @@ One entry point for everything:
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import logging
 import logging.handlers
@@ -27,6 +28,33 @@ from .core import paths, winapi, winpower
 from .version import APP_NAME, DISPLAY_NAME, __version__
 
 log = logging.getLogger("winsleep.cli")
+
+
+def _is_admin() -> bool:
+    """Check if the current process has administrator privileges."""
+    if sys.platform != "win32":
+        return True  # Non-Windows doesn't need elevation
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except Exception:
+        return False
+
+
+def _elevate_and_exit(args: list[str]) -> None:
+    """Re-launch the current executable with administrator privileges and exit.
+
+    Uses ShellExecuteW with "runas" verb to trigger UAC prompt.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        executable = sys.executable
+        params = " ".join(f'"{a}"' if " " in a else a for a in args)
+        # SW_SHOWNORMAL = 1
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", executable, params, None, 1)
+    except Exception:
+        pass
+    sys.exit(0)
 
 
 def _attach_parent_console() -> None:
@@ -170,6 +198,12 @@ def _cmd_agent(_args: argparse.Namespace) -> int:
 
 
 def _cmd_install(_args: argparse.Namespace) -> int:
+    # Creating scheduled tasks requires administrator privileges.
+    if not _is_admin():
+        log.info("install needs administrator privileges; re-launching elevated")
+        _elevate_and_exit(sys.argv)
+        return 0  # the elevated instance will do the work
+
     from .core import install
 
     ok, detail = install.install_all()
@@ -178,6 +212,12 @@ def _cmd_install(_args: argparse.Namespace) -> int:
 
 
 def _cmd_uninstall(_args: argparse.Namespace) -> int:
+    # Removing scheduled tasks requires administrator privileges.
+    if not _is_admin():
+        log.info("uninstall needs administrator privileges; re-launching elevated")
+        _elevate_and_exit(sys.argv)
+        return 0
+
     from .core import install
 
     ok, detail = install.uninstall_all()

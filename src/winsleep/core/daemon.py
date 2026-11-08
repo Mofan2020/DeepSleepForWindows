@@ -20,6 +20,8 @@ import dataclasses
 import json
 import logging
 import socket
+import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -267,6 +269,10 @@ class Daemon:
         log.info("the daemon is listening on 127.0.0.1:%d", port)
         self._server.on_agent_update = self._on_agent_update
 
+        # Ensure the agent is running in the user's session.
+        # The scheduled task may not have started it yet, or it may have crashed.
+        self._ensure_agent_running()
+
         try:
             while not self._stop.is_set():
                 self._tick()
@@ -274,6 +280,26 @@ class Daemon:
         finally:
             self._server.stop()
             winapi.release_execution_state()
+
+    def _ensure_agent_running(self) -> None:
+        """Start the agent in the active user session if it's not running.
+
+        The agent is a scheduled task (ONLOGON + /IT) but may not be running
+        if the user logged in before the task was created, or if it crashed.
+        We start it by running the task, which runs in the interactive session.
+        """
+        try:
+            from . import install
+            # Check if agent is alive via heartbeat
+            if not install.agent_running():
+                log.info("agent not running; starting it via scheduled task")
+                ok, detail = install.start_agent()
+                if ok:
+                    log.info("agent start requested: %s", detail)
+                else:
+                    log.warning("could not start agent: %s", detail)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("agent auto-start check failed: %s", exc)
 
     def stop(self) -> None:
         self._stop.set()
@@ -436,13 +462,20 @@ class Daemon:
         there is no reason to hand a shell to it either.
         """
         import subprocess  # noqa: PLC0415 - only needed when a rule asks for it
+        import sys
 
         try:
+            # CREATE_NO_WINDOW (0x08000000) prevents the black console window
+            # from flashing when the daemon (running in session 0) spawns a process.
+            creationflags = 0
+            if sys.platform == "win32":
+                creationflags = 0x08000000  # subprocess.CREATE_NO_WINDOW
             subprocess.Popen(  # noqa: S603 - no shell, the user wrote this
                 command,
                 shell=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                creationflags=creationflags,
             )
             log.info("rule %s started the command %s", rule.name, command)
         except OSError as exc:

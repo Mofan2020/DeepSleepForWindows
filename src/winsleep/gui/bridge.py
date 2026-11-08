@@ -12,10 +12,12 @@ copes with it not being there.
 
 from __future__ import annotations
 
+import ctypes
 import dataclasses
 import json
 import logging
 import socket
+import sys
 import time
 from typing import Any
 
@@ -24,6 +26,29 @@ from ..core import paths, winapi, winpower
 from ..core.rules import Rule
 
 log = logging.getLogger("winsleep.gui")
+
+
+def _is_admin() -> bool:
+    """Check if the current process has administrator privileges."""
+    if sys.platform != "win32":
+        return True
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except Exception:
+        return False
+
+
+def _elevate_and_restart() -> None:
+    """Re-launch the current executable with administrator privileges and exit."""
+    if sys.platform != "win32":
+        return
+    try:
+        executable = sys.executable
+        params = " ".join(f'"{a}"' if " " in a else a for a in sys.argv)
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", executable, params, None, 1)
+    except Exception:
+        pass
+    sys.exit(0)
 
 #: How long the bridge waits for the daemon to answer.
 DAEMON_TIMEOUT_SECONDS = 3.0
@@ -178,6 +203,11 @@ class Bridge:
 
     def install_service(self) -> dict[str, Any]:
         """Register the background tasks and start them."""
+        if not _is_admin():
+            log.info("install_service needs administrator privileges; re-launching elevated")
+            _elevate_and_restart()
+            return {"ok": False, "message": "请求管理员权限中..."}
+
         from ..core import install
 
         try:
@@ -196,6 +226,11 @@ class Bridge:
 
     def start_service(self) -> dict[str, Any]:
         """Start the background service."""
+        if not _is_admin():
+            log.info("start_service needs administrator privileges; re-launching elevated")
+            _elevate_and_restart()
+            return {"ok": False, "message": "请求管理员权限中..."}
+
         from ..core import install
 
         ok, detail = install.start_daemon()
@@ -203,6 +238,11 @@ class Bridge:
 
     def stop_service(self) -> dict[str, Any]:
         """Stop the background service."""
+        if not _is_admin():
+            log.info("stop_service needs administrator privileges; re-launching elevated")
+            _elevate_and_restart()
+            return {"ok": False, "message": "请求管理员权限中..."}
+
         from ..core import install
 
         ok, detail = install.stop_daemon()
@@ -210,6 +250,11 @@ class Bridge:
 
     def uninstall_service(self) -> dict[str, Any]:
         """Remove the background tasks."""
+        if not _is_admin():
+            log.info("uninstall_service needs administrator privileges; re-launching elevated")
+            _elevate_and_restart()
+            return {"ok": False, "message": "请求管理员权限中..."}
+
         from ..core import install
 
         ok, detail = install.uninstall_all()
