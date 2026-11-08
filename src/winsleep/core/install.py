@@ -37,6 +37,24 @@ AGENT_TASK = "DeepSleepForWindows-Agent"
 SCHEDULE_TASK = "DeepSleepForWindows-Schedule"
 
 
+def _decode(raw: bytes) -> str:
+    """Turn the raw output of a command into text.
+
+    Windows writes what these tools print in the local code page, which
+    is not UTF-8 on a Chinese machine.  The text is only used for
+    error messages, so anything that cannot be decoded is replaced
+    rather than raising.
+    """
+    if not raw:
+        return ""
+    for encoding in ("utf-8", "gbk", "cp1252"):
+        try:
+            return raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
 def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
     """Run a command and capture its output.
 
@@ -45,8 +63,6 @@ def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
     (no ``schtasks`` off Windows) comes back as a failed result rather
     than an exception.
     """
-    from .winpower import _decode
-
     try:
         result = subprocess.run(args, capture_output=True, check=False)
     except (FileNotFoundError, PermissionError, OSError):
@@ -67,23 +83,29 @@ def _python_exe() -> str:
     return sys.executable
 
 
-def _module_args(module: str) -> str:
-    """The command line that runs one of our modules."""
+def _module_args(command: str) -> str:
+    """The command line that runs one of our sub commands.
+
+    A frozen build is one executable with sub commands, so the command
+    is the executable followed by the sub command.  Running from source
+    needs the command line entry point, because the modules are not
+    scripts.
+    """
     if getattr(sys, "frozen", False):
-        return f'"{sys.executable}" --module {module}'
-    return f'"{sys.executable}" -m winsleep.{module}'
+        return f'"{sys.executable}" {command}'
+    return f'"{sys.executable}" -m winsleep.cli {command}'
 
 
 def install_daemon_task() -> tuple[bool, str]:
     """Create the task that starts the daemon at logon."""
-    command = _module_args("cli")
+    command = _module_args("daemon")
     args = [
         "schtasks",
         "/Create",
         "/TN",
         DAEMON_TASK,
         "/TR",
-        f"{command} daemon",
+        command,
         "/SC",
         "ONLOGON",
         "/F",
@@ -101,14 +123,14 @@ def install_agent_task() -> tuple[bool, str]:
     ``/IT`` makes it run in the interactive session, which is the whole
     point: the agent has to be in the same session as the keyboard.
     """
-    command = _module_args("cli")
+    command = _module_args("agent")
     args = [
         "schtasks",
         "/Create",
         "/TN",
         AGENT_TASK,
         "/TR",
-        f"{command} agent",
+        command,
         "/SC",
         "ONLOGON",
         "/IT",
@@ -271,14 +293,14 @@ def schedule_sleep(clock: str, date: str = "") -> tuple[bool, str]:
     if not task_exists(DAEMON_TASK):
         return False, "the background service is not installed yet"
 
-    command = _module_args("cli")
+    command = _module_args("sleep")
     args = [
         "schtasks",
         "/Create",
         "/TN",
         SCHEDULE_TASK,
         "/TR",
-        f'{command} sleep',
+        command,
         "/SC",
         "ONCE",
         "/ST",

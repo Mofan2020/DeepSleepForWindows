@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import pathlib
 
 import pytest
 
@@ -232,6 +233,93 @@ def test_the_daemon_deletes_a_plan(monkeypatch):
     assert answer["ok"] is True
 
 
+# ------------------------------------------------- the background service
+
+
+def test_the_install_module_does_not_depend_on_winpower():
+    """The install code used a helper that no longer exists.
+
+    It raised an ImportError the moment the background service was
+    installed, so the task was never registered and the interface
+    showed nothing at all.
+    """
+    import importlib
+
+    module = importlib.import_module("winsleep.core.install")
+    assert hasattr(module, "_decode")
+
+
+def test_the_command_line_of_a_task_is_right():
+    """The task has to run the program with the right sub command.
+
+    A frozen build is one executable, so the command is the executable
+    followed by the sub command - not ``--module``, which is not an
+    option of the program at all.
+    """
+    from winsleep.core import install
+
+    command = install._module_args("daemon")
+    assert "--module" not in command
+    assert command.endswith("daemon")
+
+
+def test_the_task_commands_use_the_sub_commands():
+    from winsleep.core import install
+
+    for name in ("daemon", "agent", "sleep"):
+        command = install._module_args(name)
+        assert command.rstrip('"').endswith(name)
+
+
+def test_the_decode_reads_what_windows_wrote():
+    from winsleep.core.install import _decode
+
+    assert _decode(b"") == ""
+    assert _decode(b"hello") == "hello"
+    # Bytes that are not valid UTF-8 must not raise.
+    assert _decode(b"\xff\xfe\x00") is not None
+
+
+def test_installing_reports_the_reason_when_it_fails(monkeypatch):
+    """A failed install has to say why, not just fail quietly."""
+    from winsleep.core import install
+    from winsleep.gui import bridge as bridge_mod
+
+    def broken():
+        raise RuntimeError("the task could not be created")
+
+    monkeypatch.setattr(install, "install_all", broken)
+
+    bridge = bridge_mod.Bridge()
+    answer = bridge.install_service()
+    assert answer["ok"] is False
+    assert "the task could not be created" in answer["message"]
+
+
+def test_installing_reports_the_reason_when_the_command_fails(monkeypatch):
+    from winsleep.core import install
+    from winsleep.gui import bridge as bridge_mod
+
+    monkeypatch.setattr(install, "install_all", lambda: (False, "schtasks failed"))
+
+    bridge = bridge_mod.Bridge()
+    answer = bridge.install_service()
+    assert answer["ok"] is False
+    assert "schtasks failed" in answer["message"]
+
+
+def test_installing_starts_the_service_when_the_tasks_are_registered(monkeypatch):
+    from winsleep.core import install
+    from winsleep.gui import bridge as bridge_mod
+
+    monkeypatch.setattr(install, "install_all", lambda: (True, "the tasks were registered"))
+    monkeypatch.setattr(install, "start_daemon", lambda: (True, "the background service was started"))
+
+    bridge = bridge_mod.Bridge()
+    answer = bridge.install_service()
+    assert answer["ok"] is True
+
+
 # ------------------------------------------------------------ the bridge
 
 
@@ -288,3 +376,29 @@ def test_the_bridge_says_so_when_there_is_no_window():
     answer = bridge.pick_file()
     assert answer["ok"] is False
     assert answer["path"] == ""
+
+
+# ------------------------------------------------------- the front end
+
+
+def test_the_interface_javascript_passes_its_own_checks():
+    """The front end has its own test script.
+
+    It runs the real code out of app.js in a node sandbox, so a change
+    in the interface that breaks the rules is caught here.
+    """
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node is not installed")
+
+    script = pathlib.Path(__file__).resolve().parent.parent / "scripts" / "check-gui-js.mjs"
+    result = subprocess.run(
+        [node, str(script)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

@@ -39,6 +39,12 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
 
+      # The interface has its own script, which runs the real code out
+      # of app.js in a node sandbox.  The GitHub runner has node
+      # already, so this costs nothing.
+      - name: Interface checks (node)
+        run: node scripts/check-gui-js.mjs
+
       - name: Unit tests
         run: pytest -q
 

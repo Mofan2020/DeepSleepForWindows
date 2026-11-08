@@ -522,6 +522,10 @@ body {
   inset: 0;
   z-index: 40;
   display: flex;
+
+.sheet-backdrop[hidden] {
+  display: none !important;
+}
   align-items: center;
   justify-content: center;
   padding: 40px 20px;

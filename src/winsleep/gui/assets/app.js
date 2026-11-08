@@ -425,7 +425,7 @@ let processPickerResolve = null;
 function pickProcess() {
   return new Promise((resolve) => {
     processPickerResolve = resolve;
-    $('processSheet').hidden = false;
+    $('processSheet').style.display = 'flex';
     $('processSearch').value = '';
     $('processList').innerHTML = '<p class="empty">正在读进程列表…</p>';
     loadProcesses('');
@@ -433,7 +433,7 @@ function pickProcess() {
 }
 
 function closeProcessSheet(result) {
-  $('processSheet').hidden = true;
+  $('processSheet').style.display = 'none';
   if (processPickerResolve) {
     processPickerResolve(result);
     processPickerResolve = null;
@@ -468,7 +468,10 @@ async function loadProcesses(wanted) {
     exe.textContent = row.exe || '';
 
     item.append(name, exe);
-    item.addEventListener('click', () => closeProcessSheet(row.name));
+    item.addEventListener('click', (event) => {
+      event.stopPropagation();
+      closeProcessSheet(row.name);
+    });
     list.appendChild(item);
   }
 }
@@ -562,10 +565,13 @@ async function refresh() {
   $('idlePlanValue').textContent = config.idle_plan || '未设置';
   $('activePlanValue').textContent = config.active_plan || '未设置';
 
-  // The config keeps seconds, the interface works in minutes.
-  $('idleMinutes').value = Math.round((config.idle_seconds ?? 600) / 60);
-  $('idleCpu').value = config.idle_cpu_percent ?? 15;
-  $('serverLockMinutes').value = Math.round((config.server_lock_seconds ?? 300) / 60);
+  // The config keeps seconds, the interface works in minutes.  A field
+  // the user is typing in is left alone: overwriting it every five
+  // seconds would throw the value away before it is saved.
+  const active = document.activeElement;
+  setIfIdle($('idleMinutes'), Math.round((config.idle_seconds ?? 600) / 60), active);
+  setIfIdle($('idleCpu'), config.idle_cpu_percent ?? 15, active);
+  setIfIdle($('serverLockMinutes'), Math.round((config.server_lock_seconds ?? 300) / 60), active);
   $('cpuValue').textContent = `低于 ${config.idle_cpu_percent ?? 15}%`;
 
   $('serverToggle').checked = !!config.server_mode;
@@ -590,6 +596,43 @@ async function refresh() {
   renderService(service);
 }
 
+/* Save one of the number fields.  Each one is a different setting, so
+ * they are saved separately. */
+function saveNumberField(id) {
+  const field = $(id);
+  const value = parseFloat(field.value);
+  if (!Number.isFinite(value) || value < 0) return;
+
+  if (id === 'idleMinutes') {
+    if (value <= 0) return;
+    api().save_config({ idle_seconds: Math.round(value * 60) });
+    return;
+  }
+  if (id === 'idleCpu') {
+    api().save_config({ idle_cpu_percent: value });
+    return;
+  }
+  if (id === 'serverLockMinutes') {
+    if (value <= 0) return;
+    api().save_config({ server_lock_seconds: Math.round(value * 60) });
+  }
+}
+
+/* Write a value into a field, unless the user is working in it.
+
+ * This is the rule that keeps a value the user typed from being
+ * thrown away: the interface refreshes every five seconds, and an
+ * unconditional write would put the old value back before the user
+ * had finished typing.
+ */
+function setIfIdle(field, value, active) {
+  if (!field) return false;
+  if (field === active) return false;
+  if (field.dataset && field.dataset.editing === '1') return false;
+  field.value = value;
+  return true;
+}
+
 /* ---------------------------------------------------------------- wire */
 
 function wire() {
@@ -606,6 +649,24 @@ function wire() {
 
   $('refreshBtn').addEventListener('click', refresh);
 
+  // The number fields save as soon as the value changes, so a value
+  // that is typed but never confirmed is not lost.
+  for (const id of ['idleMinutes', 'idleCpu', 'serverLockMinutes']) {
+    const field = $(id);
+    field.addEventListener('input', () => {
+      field.dataset.editing = '1';
+      saveNumberField(id);
+    });
+    field.addEventListener('change', async () => {
+      await saveNumberField(id);
+      field.dataset.editing = '0';
+      await refresh();
+    });
+    field.addEventListener('blur', () => {
+      field.dataset.editing = '0';
+    });
+  }
+
   $('switchBtn').addEventListener('click', async () => {
     const plan = $('planSelect').value;
     const result = await api().switch_plan(plan);
@@ -613,18 +674,6 @@ function wire() {
       $('currentPlan').textContent = result.message || '切换失败';
     }
     await refresh();
-  });
-
-  $('idleMinutes').addEventListener('change', async () => {
-    const minutes = parseFloat($('idleMinutes').value);
-    if (!Number.isFinite(minutes) || minutes <= 0) return;
-    await api().save_config({ idle_seconds: Math.round(minutes * 60) });
-  });
-
-  $('idleCpu').addEventListener('change', async () => {
-    const percent = parseFloat($('idleCpu').value);
-    if (!Number.isFinite(percent) || percent < 0) return;
-    await api().save_config({ idle_cpu_percent: percent });
   });
 
   $('idlePlanSelect').addEventListener('change', async () => {
@@ -640,12 +689,6 @@ function wire() {
   $('serverToggle').addEventListener('change', async (event) => {
     await api().set_server_mode(event.target.checked);
     $('serverValue').textContent = event.target.checked ? '开启' : '关闭';
-  });
-
-  $('serverLockMinutes').addEventListener('change', async () => {
-    const minutes = parseFloat($('serverLockMinutes').value);
-    if (!Number.isFinite(minutes) || minutes <= 0) return;
-    await api().save_config({ server_lock_seconds: Math.round(minutes * 60) });
   });
 
   $('keepAwakeToggle').addEventListener('change', async (event) => {
@@ -766,9 +809,12 @@ function wire() {
     await refresh();
   });
 
-  $('closeProcessSheet').addEventListener('click', () => closeProcessSheet(null));
+  $('closeProcessSheet').addEventListener('click', (event) => {
+    event.stopPropagation();
+    closeProcessSheet(null);
+  });
   $('processSheet').addEventListener('click', (event) => {
-    if (event.target === $('processSheet')) closeProcessSheet(null);
+    if (event.currentTarget === event.target) closeProcessSheet(null);
   });
   $('processSearch').addEventListener('input', (event) => {
     loadProcesses(event.target.value);

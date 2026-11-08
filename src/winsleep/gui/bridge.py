@@ -180,10 +180,18 @@ class Bridge:
         """Register the background tasks and start them."""
         from ..core import install
 
-        ok, detail = install.install_all()
+        try:
+            ok, detail = install.install_all()
+        except Exception as exc:  # noqa: BLE001 - the reason has to show
+            log.exception("the background service could not be installed")
+            return {"ok": False, "message": f"安装失败：{exc}"}
         if not ok:
-            return {"ok": False, "message": detail}
-        ok, detail = install.start_daemon()
+            return {"ok": False, "message": f"安装失败：{detail}"}
+        try:
+            ok, detail = install.start_daemon()
+        except Exception as exc:  # noqa: BLE001
+            log.exception("the background service could not be started")
+            return {"ok": False, "message": f"启动失败：{exc}"}
         return {"ok": ok, "message": detail}
 
     def start_service(self) -> dict[str, Any]:
