@@ -15,12 +15,64 @@ Usage::
 
 from __future__ import annotations
 
+import json
+import signal
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src" / "winsleep"
+
+#: Where the original code is kept while it is broken.  A run that is
+#: killed cannot put the code back itself, so the next run finds the
+#: original here and puts it back.
+JOURNAL = ROOT / ".mutation-journal.json"
+
+
+def read_journal() -> dict[str, str]:
+    """The original code of the files that were changed."""
+    try:
+        data = json.loads(JOURNAL.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(key): str(value) for key, value in data.items()}
+
+
+def write_journal(data: dict[str, str]) -> None:
+    try:
+        JOURNAL.write_text(json.dumps(data), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def put_back() -> None:
+    """Put the original code back.
+
+    This runs when the script is finished, and also when it is asked to
+    stop.  A run that is killed hard - the machine goes down - cannot
+    do it, which is why the original code is written down first.
+    """
+    for name, original in read_journal().items():
+        path = ROOT / name
+        try:
+            if path.read_text(encoding="utf-8") != original:
+                path.write_text(original, encoding="utf-8")
+                print(f"put the original code back into {name}")
+        except OSError:
+            continue
+    try:
+        JOURNAL.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def on_signal(signum, _frame):
+    """Put the code back when the script is stopped."""
+    put_back()
+    sys.exit(128 + signum)
 
 #: Every mutation is (name, file, original snippet, broken snippet).
 #: The snippet has to appear exactly once in the file.
@@ -199,88 +251,26 @@ def run_tests() -> subprocess.CompletedProcess[str]:
     )
 
 
-#: The state of the source files before the last run.  A run that was
-#: killed leaves the files in a state that is not in here, and that is
-#: how the leftovers are found.
-STATE_FILE = ROOT / ".mutation-state.json"
-
-
-def source_hashes() -> dict[str, str]:
-    """The hash of every source file."""
-    import hashlib
-
-    hashes = {}
-    for path in sorted(SRC.rglob("*.py")):
-        hashes[str(path.relative_to(ROOT))] = hashlib.sha256(
-            path.read_bytes()
-        ).hexdigest()
-    return hashes
-
-
-def find_leftovers() -> list[str]:
-    """Look for mutations that a killed run left behind.
-
-    A run that is killed hard - the machine goes down, the terminal is
-    closed - cannot put the original code back.  The leftover looks
-    like perfectly normal code: one number that is wrong.  Nobody
-    notices until a test fails for no reason.
-
-    The state of the files is written down before the run and compared
-    with it the next time the script starts.  A file that does not
-    match is one that was changed and not put back.
-    """
-    import hashlib
-    import json
-
-    if not STATE_FILE.exists():
-        return []
-
-    try:
-        before = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return []
-
-    leftovers = []
-    for path in sorted(SRC.rglob("*.py")):
-        key = str(path.relative_to(ROOT))
-        expected = before.get(key)
-        if expected is None:
-            continue
-        actual = hashlib.sha256(path.read_bytes()).hexdigest()
-        if actual != expected:
-            leftovers.append(key)
-    return leftovers
-
-
-def remember_state() -> None:
-    """Write down the state of the files for the next run."""
-    import json
-
-    try:
-        STATE_FILE.write_text(
-            json.dumps(source_hashes(), indent=2), encoding="utf-8"
-        )
-    except OSError:
-        pass
-
-
 def main() -> int:
+    for name in ("SIGTERM", "SIGINT", "SIGHUP"):
+        signum = getattr(signal, name, None)
+        if signum is not None:
+            try:
+                signal.signal(signum, on_signal)
+            except (OSError, ValueError):
+                pass
+
     failures: list[str] = []
     survived: list[str] = []
 
-    leftovers = find_leftovers()
+    # A run that was killed before could put the code back.  The
+    # original is written down first, so it can be put back now.
+    leftovers = read_journal()
     if leftovers:
-        print("a run was killed before it could put the code back.")
-        print("these files still have a mutation in them:")
-        for path in leftovers:
-            print(f"  - {path}")
-        print()
-        print("put them back with: git checkout src/winsleep")
-        return 2
+        print("a previous run was killed before it could put the code back.")
+        put_back()
 
-    # The state is written down before anything is changed, so a run
-    # that is killed can be found the next time.
-    remember_state()
+    journal: dict[str, str] = {}
 
     for name, path, original, broken in MUTATIONS:
         source = path.read_text(encoding="utf-8")
@@ -293,6 +283,10 @@ def main() -> int:
                     f"{name}: the snippet appears {found} times in {path.name}"
                 )
             continue
+
+        key = str(path.relative_to(ROOT))
+        journal.setdefault(key, source)
+        write_journal(journal)
 
         try:
             path.write_text(source.replace(original, broken), encoding="utf-8")
@@ -307,6 +301,12 @@ def main() -> int:
             print(f"NOT CAUGHT  {name}")
         else:
             print(f"caught      {name}")
+
+    # Everything is back in place.
+    try:
+        JOURNAL.unlink(missing_ok=True)
+    except OSError:
+        pass
 
     print()
     print(f"{len(MUTATIONS) - len(survived)}/{len(MUTATIONS)} mutations caught")
