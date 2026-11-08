@@ -208,9 +208,10 @@ def uninstall_all() -> tuple[bool, str]:
 # port of its own.
 AGENT_HEARTBEAT = "agent.alive"
 
-# How long a heartbeat stays good.  The agent writes it every few
-# seconds, so a minute is generous.
-HEARTBEAT_SECONDS = 60
+# How long a heartbeat stays good.  The agent writes it every five
+# seconds, so twenty seconds is generous enough to survive a busy
+# moment and short enough that a stopped agent is noticed right away.
+HEARTBEAT_SECONDS = 20
 
 
 def heartbeat_path():
@@ -315,6 +316,15 @@ def stop_daemon() -> tuple[bool, str]:
         if task_exists(name):
             stop_task(name)
             messages.append(f"{name} was stopped")
+
+    # The heartbeat is taken away as well.  Without this the window
+    # would say the agent is still running for a while after it was
+    # stopped.
+    try:
+        heartbeat_path().unlink(missing_ok=True)
+    except OSError as exc:
+        log.debug("could not remove the heartbeat: %s", exc)
+
     if not messages:
         return True, "nothing was running"
     return True, ", ".join(messages)

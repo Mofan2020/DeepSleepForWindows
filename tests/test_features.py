@@ -529,3 +529,44 @@ def test_a_console_keeps_its_own_code_page(monkeypatch):
     monkeypatch.setattr(cli.sys, "stdout", ascii_stream)
     cli._use_utf8_output()
     assert ascii_stream.reconfigured["encoding"] == "utf-8"
+
+
+def test_stopping_the_service_takes_the_heartbeat_away(monkeypatch, tmp_path):
+    """The window says the agent stopped right away.
+
+    A heartbeat that is still there would keep saying the agent is
+    running for a while after it was stopped.
+    """
+    from winsleep.core import install
+
+    monkeypatch.setattr(install, "heartbeat_path", lambda: tmp_path / "agent.alive")
+    monkeypatch.setattr(install, "task_exists", lambda _name: False)
+
+    install.write_heartbeat()
+    assert (tmp_path / "agent.alive").exists()
+
+    install.stop_daemon()
+    assert not (tmp_path / "agent.alive").exists()
+
+
+def test_the_heartbeat_stays_good_only_for_a_short_while(monkeypatch, tmp_path):
+    """A heartbeat that is too old means the agent stopped.
+
+    The agent writes it every five seconds, so twenty seconds is
+    enough to survive a busy moment and short enough that a stopped
+    agent is noticed right away.
+    """
+    import time
+
+    from winsleep.core import install
+
+    monkeypatch.setattr(install, "heartbeat_path", lambda: tmp_path / "agent.alive")
+    assert install.HEARTBEAT_SECONDS <= 30
+
+    install.write_heartbeat()
+    assert install.agent_running() is True
+
+    (tmp_path / "agent.alive").write_text(
+        str(time.time() - install.HEARTBEAT_SECONDS - 1), encoding="utf-8"
+    )
+    assert install.agent_running() is False
