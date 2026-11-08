@@ -56,6 +56,25 @@ Windows 的后台服务跑在没有键鼠的会话里。那里的进程**永远�
 
 `process_running` 条件需要真实的进程列表。daemon 把「游戏列表」和「所有规则里出现的进程名」合成一份，一次 `psutil` 查询，5 秒一次，不会因为规则多而变慢。
 
+## 那台 Windows 机器上的开发环境
+
+源码：`D:\skyc8266\dev\MyProjects\DeepSleepForWindows`
+
+签名相关的文件在 `D:\skyc8266\dev\`：`signing.pfx`、`signing-password.txt`、`signtool.exe`、`ServBay-User-CA-ECC-Root.crt`。**都不在仓库里。**
+
+一条命令构建 + 签名：
+
+```bat
+powershell -ExecutionPolicy Bypass -File D:\skyc8266\dev\build.ps1
+```
+
+脚本会依次做：装依赖、跑测试、PyInstaller 打包、跑 `selftest` 验包完整、签名并验证。
+
+**PyInstaller 不能在 `C:\Windows\Temp` 下运行** —— 报 `Do not run pyinstaller from C:\Windows\Temp`，源码要放在正常的目录里。
+
+那台机器的 Python 是 Anaconda：`D:\skyc8266\dev\env\anaconda3\python.exe`。`where python` 的第一顺位就是它，但 `C:\Program Files\python` 也装了一个，脚本里用 `python` 时要留意是哪个。
+
+
 ## 打包时漏掉依赖的坑
 
 0.1.0 发出去，用户双击就报：
