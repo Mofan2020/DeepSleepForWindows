@@ -461,9 +461,6 @@ class Daemon:
         chain other commands together.  It is the user's own config, but
         there is no reason to hand a shell to it either.
         """
-        import subprocess  # noqa: PLC0415 - only needed when a rule asks for it
-        import sys
-
         try:
             # CREATE_NO_WINDOW (0x08000000) prevents the black console window
             # from flashing when the daemon (running in session 0) spawns a process.
