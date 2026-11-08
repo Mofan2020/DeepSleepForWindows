@@ -57,6 +57,10 @@ class Config:
     #: The user rules, evaluated in priority order.
     rules: list[Rule] = dataclasses.field(default_factory=list)
 
+    #: The GUID of the plan the user edited last.  The interface opens
+    #: on this one.
+    last_plan_guid: str = ""
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "idle_plan": self.idle_plan,
@@ -69,6 +73,7 @@ class Config:
             "server_lock_seconds": self.server_lock_seconds,
             "keep_awake": self.keep_awake,
             "rules": [rule.to_dict() for rule in self.rules],
+            "last_plan_guid": self.last_plan_guid,
         }
 
     @classmethod
@@ -90,6 +95,7 @@ class Config:
             server_lock_seconds=int(_number(raw, "server_lock_seconds", 300)),
             keep_awake=bool(raw.get("keep_awake", False)),
             rules=[Rule.from_dict(r) for r in raw.get("rules", []) or []],
+            last_plan_guid=str(raw.get("last_plan_guid", "") or ""),
         )
 
 

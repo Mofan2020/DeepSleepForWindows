@@ -195,6 +195,69 @@ python scripts/mutation_test.py
 CI 里的做法：证书以 base64 的 PKCS#12 存在 repository secrets 里，签名前把 `certificates/` 里的根证书装进 runner 的信任库，签完 `verify /pa` 验一遍，然后把 PFX 文件删掉。私钥不进仓库、不进产物。
 
 
+## 电源计划的内容也能改
+
+用户要「自定义电源计划」，指的是改一个计划**里面**的东西——多久关显示、多久睡觉、处理器最低降到多少——而不只是换一个计划。
+
+这些设置存在注册表里，但**不能直接改注册表**：方案树里只存了跟默认值不同的项，而且改了不生效。正确做法是用 `powrprof.dll` 的正式 API：
+
+| 干什么 | 调用 |
+| --- | --- |
+| 读设置的值 | `PowerReadACValueIndex` |
+| 读设置的默认值 | `PowerReadACDefaultIndex` |
+| 写设置的值 | `PowerWriteACValueIndex` |
+| 复制一个计划 | `PowerDuplicateScheme` |
+| 给计划起名字 | `PowerWriteFriendlyName` |
+| 删掉一个计划 | `PowerDeleteScheme` |
+
+**写需要管理员权限**，因为设置在 `HKEY_LOCAL_MACHINE` 下面。所以写入走 daemon（跑在 SYSTEM 下），GUI 通过 socket 让它做。这跟锁屏必须由 agent 做是同一个道理：**没有权限的那一半，交给有的那一半**。
+
+### 三个坑
+
+**`RootPowerKey` 必须传 NULL。** 文档说它是「保留给以后用，必须是 NULL」。传 `HKEY_LOCAL_MACHINE` 居然也能工作——这是最容易让人放松警惕的一种「能用」，因为它不报错，只是恰好没出问题。
+
+**`PowerDuplicateScheme` 的第三个参数是 `GUID**`，不是 `GUID*`。** 传 `GUID*` 会把源 GUID 当成目标 GUID 的地址，函数把源的内容当成指针去解引用，拿到一堆乱码当新 GUID。正确写法是传一个初始为 NULL 的 `POINTER(GUID)`，函数自己分配内存，返回时用 `LocalFree` 释放——**这段内存属于调用方，不释放就是泄漏**。
+
+**`PowerWriteFriendlyName` 有六个参数，不是四个。** 少了 `SubGroupOfPowerSettingsGuid` 和 `PowerSettingGuid`，再少一个 `BufferSize`。而且 `Buffer` 要的是 `UCHAR*`，得用 `ctypes.cast` 把 unicode buffer 转过去，直接 `byref` 传的是缓冲区本身的地址，不是内容。
+
+### 设置项的 GUID 是查出来的，不是记出来的
+
+我一开始凭印象写了几个 GUID，**全是错的**：
+
+| 我写的 | 实际 |
+| --- | --- |
+| `501a4d13-...` 当视频组 | 那是 PCI Express 组，视频组是 `7516b95f-...` |
+| `3a0dfd23-...` 当「关闭显示」 | 那是别的系统的 GUID，真正的关闭显示是 `3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e` |
+| `0012a47e-...` 当磁盘组 | 磁盘组是 `0012ee47-...` |
+
+错的 GUID 不会报错——`PowerReadACValueIndex` 返回一个非零的错误码，`read_setting` 于是退回去读默认值，默认值也读不到，最后这一项就**悄悄消失**了。界面上少一行，程序不报错。
+
+正确的做法是在目标机器上用 `powercfg /query SCHEME_CURRENT <子组>` 读一次，把「电源设置 GUID → 名字 → 当前值」抄下来，写进代码里的固定表。**`powercfg` 只在开发时用一次，产品代码里一行都不碰。**
+
+一个计划里读不到的设置项会被跳过（`read_plan_settings` 只返回读得到的），所以「少了一项」比「多了一项」更隐蔽。
+
+### 复制出来的计划默认继承源计划的名字
+
+`PowerDuplicateScheme` 复制完，副本的 `FriendlyName` 是源计划的名字。必须紧接着调 `PowerWriteFriendlyName` 改名，否则界面上会出现两个一模一样的名字。
+
+## 时间单位：配置里是秒，界面上是分钟
+
+内部统一用秒（`GetLastInputInfo` 出来的就是秒，规则引擎也是秒），界面上用分钟，因为「600 秒」没人愿意填，「10 分钟」才有人填。
+
+规则里的值另外放宽了一点：`10m`、`2h`、`1d`、`10分钟`、`2小时` 都认。解析在 `rules.parse_duration()`，**CPU 阈值不走这个函数**——百分比不是时长，`15m` 应该是无效的而不是 900。这条有专门的测试和变异守着。
+
+## 液态玻璃
+
+界面换成液态玻璃，按 apple-design 的材质规范做的：
+
+- 半透明层 + `backdrop-filter: blur()` + `saturate(180%)`
+- 每层上面一条亮边（`--glass-edge`），模拟光打在材料边缘
+- 大面板用更强的模糊和更重的阴影，小控件用轻的
+- **浅色半透明不叠在浅色半透明上**——叠了就没法读了
+- 背景是三个模糊的色块（`.aurora`），玻璃背后有东西，才看得出是玻璃
+- `prefers-reduced-transparency` 时全部退回不透明
+- `prefers-reduced-motion` 时动画换成淡入
+
 ## 没做的部分
 
 - **没有做工具箱。** 用户明确说不要。

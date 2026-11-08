@@ -34,6 +34,7 @@ log = logging.getLogger("winsleep.install")
 
 DAEMON_TASK = "DeepSleepForWindows-Daemon"
 AGENT_TASK = "DeepSleepForWindows-Agent"
+SCHEDULE_TASK = "DeepSleepForWindows-Schedule"
 
 
 def _run(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -175,3 +176,129 @@ def uninstall_all() -> tuple[bool, str]:
     if not messages:
         return True, "nothing was installed"
     return True, ", ".join(messages)
+
+
+# ------------------------------------------------------------------ service
+
+
+def _matching_processes(wanted: str, unwanted: tuple[str, ...] = ()) -> bool:
+    """True when a process of ours is running with *wanted* in its command.
+
+    The command line of a frozen build is the path of the executable
+    plus the sub command, so the sub command is what tells the daemon
+    and the agent apart.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return False
+
+    try:
+        for process in psutil.process_iter(["cmdline"]):
+            try:
+                cmdline = process.info.get("cmdline") or []
+            except Exception:  # noqa: BLE001 - psutil raises many things
+                continue
+            joined = " ".join(cmdline).lower()
+            if wanted not in joined:
+                continue
+            if any(word in joined for word in unwanted):
+                continue
+            return True
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not look at the processes: %s", exc)
+    return False
+
+
+def daemon_running() -> bool:
+    """True when the daemon is running right now."""
+    return _matching_processes("daemon", unwanted=("agent",))
+
+
+def agent_running() -> bool:
+    """True when the agent is running right now."""
+    return _matching_processes("agent")
+
+
+def service_installed() -> bool:
+    """True when the background tasks are registered."""
+    return task_exists(DAEMON_TASK)
+
+
+def start_daemon() -> tuple[bool, str]:
+    """Start the daemon task right now."""
+    if not task_exists(DAEMON_TASK):
+        return False, "the background service is not installed yet"
+    result = _run(["schtasks", "/Run", "/TN", DAEMON_TASK])
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        return False, detail or "the daemon did not start"
+    return True, "the background service was started"
+
+
+def stop_daemon() -> tuple[bool, str]:
+    """Stop the daemon and the agent."""
+    messages = []
+    for name in (DAEMON_TASK, AGENT_TASK):
+        if task_exists(name):
+            stop_task(name)
+            messages.append(f"{name} was stopped")
+    if not messages:
+        return True, "nothing was running"
+    return True, ", ".join(messages)
+
+
+def service_status() -> dict[str, object]:
+    """What the interface needs to draw the state of the service."""
+    return {
+        "installed": service_installed(),
+        "running": daemon_running(),
+        "agent_running": agent_running(),
+    }
+
+
+# ----------------------------------------------------------------- schedule
+
+
+def schedule_sleep(clock: str, date: str = "") -> tuple[bool, str]:
+    """Put the machine to sleep at a given time.
+
+    The scheduled task runs this program again with the ``sleep``
+    command, so the machine is put to sleep by the same code that the
+    rest of the program uses.  *clock* is ``HH:MM`` and *date* is
+    ``YYYY/MM/DD``; without a date the next occurrence is used.
+    """
+    if not task_exists(DAEMON_TASK):
+        return False, "the background service is not installed yet"
+
+    command = _module_args("cli")
+    args = [
+        "schtasks",
+        "/Create",
+        "/TN",
+        SCHEDULE_TASK,
+        "/TR",
+        f'{command} sleep',
+        "/SC",
+        "ONCE",
+        "/ST",
+        clock,
+        "/F",
+    ]
+    if date:
+        args += ["/SD", date]
+    result = _run(args)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        return False, detail or "the schedule could not be set"
+    return True, f"the machine will sleep at {clock}"
+
+
+def cancel_scheduled_sleep() -> tuple[bool, str]:
+    """Cancel the scheduled sleep."""
+    if not task_exists(SCHEDULE_TASK):
+        return True, "nothing was scheduled"
+    ok, detail = remove_task(SCHEDULE_TASK)
+    if not ok:
+        return False, detail
+    return True, "the scheduled sleep was cancelled"

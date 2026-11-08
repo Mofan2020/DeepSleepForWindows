@@ -63,6 +63,70 @@ MUTATIONS: list[tuple[str, Path, str, str]] = [
         if False:""",
     ),
     (
+        "a duration is read as seconds whatever unit it is written in",
+        SRC / "core" / "rules.py",
+        """    factor = _DURATION_UNITS.get(unit_text)
+    if factor is None:
+        return None
+    try:
+        return float(number_text) * factor""",
+        """    factor = _DURATION_UNITS.get(unit_text)
+    if factor is None:
+        return None
+    try:
+        return float(number_text)""",
+    ),
+    (
+        "the Chinese units are not understood",
+        SRC / "core" / "rules.py",
+        """    for suffix, factor in (
+        ("毫秒", 0.001),
+        ("秒", 1),
+        ("分钟", 60),
+        ("分", 60),
+        ("小时", 3600),
+        ("时", 3600),
+        ("天", 86400),
+    ):""",
+        """    for suffix, factor in ():""",
+    ),
+    (
+        "a CPU threshold is read as a duration",
+        SRC / "core" / "rules.py",
+        """    if kind == "cpu_below":
+        threshold = parse_number(value)""",
+        """    if kind == "cpu_below":
+        threshold = parse_duration(value)""",
+    ),
+    (
+        "the daemon writes the plan settings to the wrong plan",
+        SRC / "core" / "daemon.py",
+        """        ok, detail = powersettings.apply_settings(guid, list(changes))""",
+        """        ok, detail = powersettings.apply_settings("", list(changes))""",
+    ),
+    (
+        "the daemon writes no plan settings at all",
+        SRC / "core" / "daemon.py",
+        """        ok, detail = powersettings.apply_settings(guid, list(changes))""",
+        """        ok, detail = True, "ok" """,
+    ),
+    (
+        "the daemon copies a plan without a name",
+        SRC / "core" / "daemon.py",
+        """        if not name:
+            return json.dumps({"ok": False, "message": "没有给新计划起名字"}).encode("utf-8")""",
+        """        if False:
+            return json.dumps({"ok": False, "message": "没有给新计划起名字"}).encode("utf-8")""",
+    ),
+    (
+        "the process list is not filtered",
+        SRC / "gui" / "bridge.py",
+        """                if needle and needle not in name.lower():
+                    continue""",
+        """                if False:
+                    continue""",
+    ),
+    (
         "a busy CPU no longer keeps the machine on the fast plan",
         SRC / "core" / "decide.py",
         "    if snap.cpu_percent >= idle_cpu_percent:",

@@ -7,7 +7,7 @@
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Release](https://img.shields.io/badge/release/Mofan2020/DeepSleepForWindows)
 
-- **Version**: 0.1.0
+- **Version**: 0.2.0
 - **Language**: Python 3.11+, pywebview
 - **License**: MIT
 
@@ -31,7 +31,11 @@ DeepSleep For Windows does that, and it lets you write your own rules on top.
 - **Automation rules** — combine idle time, CPU load, a running process, a time
   window or a weekday, and run an action when they all hold.
 - **Runs in the background** — two scheduled tasks, one for the daemon and one for
-  the agent, so it keeps working with the window closed.
+  the agent, so it keeps working with the window closed. You can install, start and
+  stop them from the window.
+- **Your own power plans** — copy a plan and change what is inside it: when the
+  screen goes dark, when the machine sleeps, when it hibernates, how far the
+  processor may drop.
 - **A window, if you want one** — a small pywebview interface for the settings and
   the live state.
 
@@ -48,10 +52,11 @@ DeepSleepForWindows daemon    session 0    power plans, rules, keep-awake
 DeepSleepForWindows agent     session 1    reads the real idle time, locks the screen
 ```
 
-The agent is the only part that talks to the Win32 API. Everything else - the rule
-engine, the config store, the power plan handling, the scheduled tasks - is plain
-Python or a call to a command line tool Windows already ships (`powercfg`,
-`schtasks`, `tasklist`). There is no pywin32, no .NET, no PowerShell.
+The agent is the only part that talks to the Win32 API. The rule engine, the
+config store and the power plan handling are plain Python. The system data comes
+from the Windows API, the registry or `psutil` - never from the output of a
+command line tool, which is localized and would read differently on a German
+machine than on a Chinese one. There is no pywin32, no .NET, no PowerShell.
 
 ## Install
 
@@ -59,7 +64,8 @@ Download the zip from [Releases](https://github.com/Mofan2020/DeepSleepForWindow
 Unpacking it gives you **one `DeepSleepForWindows.exe`**, nothing else. Put it
 wherever you like and start it by double clicking it.
 
-To register the background tasks (run this in cmd or PowerShell):
+To register the background tasks, press **Install** in the window. You can also
+do it from a terminal:
 
 ```bat
 DeepSleepForWindows.exe install
@@ -113,7 +119,8 @@ them; the file is plain JSON and can be edited by hand.
   "server_mode": false,
   "server_lock_seconds": 300,
   "keep_awake": false,
-  "rules": []
+  "rules": [],
+  "last_plan_guid": ""
 }
 ```
 
@@ -121,8 +128,8 @@ them; the file is plain JSON and can be edited by hand.
 
 | Condition | Value | Meaning |
 | --- | --- | --- |
-| `idle_at_least` | seconds | The user has been idle for at least this long. |
-| `idle_below` | seconds | The user has been idle for less than this long. |
+| `idle_at_least` | seconds | The user has been idle for at least this long. A unit is understood too: `10m`, `2h`, `1d`. |
+| `idle_below` | seconds | The user has been idle for less than this long. A unit is understood too. |
 | `cpu_below` | percent | Total CPU usage is below this. |
 | `cpu_above` | percent | Total CPU usage is at or above this. |
 | `process_running` | name | A process with this name is running. `.exe` is optional. |

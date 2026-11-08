@@ -7,12 +7,19 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div class="aurora" aria-hidden="true">
+  <span class="blob b1"></span>
+  <span class="blob b2"></span>
+  <span class="blob b3"></span>
+</div>
+
 <div class="app">
 
-  <header class="bar">
+  <header class="bar glass">
     <div class="brand">
       <span class="dot" id="statusDot"></span>
-      <h1>DeepSleep For Windows(Beta)</h1>
+      <h1>DeepSleep For Windows</h1>
+      <span class="tag">Beta</span>
     </div>
     <div class="meta">
       <span id="activePlan">--</span>
@@ -21,72 +28,199 @@
     </div>
   </header>
 
-  <section class="cards">
-    <div class="card">
-      <div class="card-label">电源计划</div>
-      <div class="card-value" id="currentPlan">读取中…</div>
-      <div class="card-actions">
-        <select id="planSelect" class="select"></select>
-        <button class="btn" id="switchBtn">切换</button>
+  <section class="panel glass service">
+    <div class="service-head">
+      <div class="grow">
+        <h2>后台服务</h2>
+        <p class="muted" id="serviceText">正在检查…</p>
+      </div>
+      <div class="service-actions" id="serviceActions"></div>
+    </div>
+    <p class="hint" id="serviceHint"></p>
+  </section>
+
+  <nav class="tabs glass" id="tabs">
+    <button class="tab active" data-tab="power">电源</button>
+    <button class="tab" data-tab="rules">自动化</button>
+    <button class="tab" data-tab="system">系统</button>
+    <button class="tab" data-tab="logs">日志</button>
+  </nav>
+
+  <!-- ------------------------------------------------------------ 电源 -->
+  <section class="page" id="page-power">
+
+    <div class="cards">
+      <div class="card glass">
+        <div class="card-label">当前电源计划</div>
+        <div class="card-value" id="currentPlan">读取中…</div>
+        <div class="card-actions">
+          <select id="planSelect" class="select"></select>
+          <button class="btn" id="switchBtn">切换</button>
+        </div>
+      </div>
+
+      <div class="card glass">
+        <div class="card-label">空闲时切换到</div>
+        <div class="card-value" id="idlePlanValue">未设置</div>
+        <div class="card-actions">
+          <span class="hint">空闲 <input id="idleMinutes" class="num" type="number" min="1" step="1"> 分钟后切到</span>
+          <select id="idlePlanSelect" class="select"></select>
+        </div>
+        <p class="hint">单位是分钟，1 分钟 = 60 秒。</p>
+      </div>
+
+      <div class="card glass">
+        <div class="card-label">活跃时切换到</div>
+        <div class="card-value" id="activePlanValue">未设置</div>
+        <div class="card-actions">
+          <select id="activePlanSelect" class="select"></select>
+        </div>
+      </div>
+
+      <div class="card glass">
+        <div class="card-label">空闲判定</div>
+        <div class="card-value" id="cpuValue">--</div>
+        <div class="card-actions">
+          <span class="hint">CPU 低于 <input id="idleCpu" class="num" type="number" min="0" max="100" step="1"> % 才算空闲</span>
+        </div>
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-label">空闲切换</div>
-      <div class="card-value" id="idlePlanValue">未设置</div>
-      <div class="card-actions">
-        <span class="hint">空闲 <input id="idleSeconds" class="num" type="number" min="60" step="60"> 秒后切到</span>
-        <select id="idlePlanSelect" class="select"></select>
+    <div class="panel glass">
+      <div class="panel-head">
+        <div class="grow">
+          <h2>自定义电源计划</h2>
+          <p class="muted">改一个计划里的具体内容，比如多久关屏幕、多久睡觉。</p>
+        </div>
+        <div class="row-actions">
+          <select id="editPlanSelect" class="select"></select>
+          <button class="btn" id="duplicatePlanBtn">复制一份</button>
+          <button class="btn ghost" id="deletePlanBtn">删除</button>
+        </div>
+      </div>
+
+      <div id="planSettings" class="settings">
+        <p class="empty">选一个计划。</p>
+      </div>
+
+      <div class="settings-actions" id="planSaveBar" hidden>
+        <button class="btn primary" id="savePlanBtn">保存改动</button>
+        <span class="hint" id="planSaveHint"></span>
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-label">服务器模式</div>
-      <div class="card-value" id="serverValue">关闭</div>
-      <div class="card-actions">
-        <label class="switch">
-          <input type="checkbox" id="serverToggle">
-          <span>持续防睡眠 + 空闲锁屏</span>
-        </label>
+    <div class="panel glass">
+      <h2>游戏进程</h2>
+      <p class="muted">这些程序在跑的时候，机器保持高性能，而且不休眠。</p>
+      <div id="gameList" class="chips"></div>
+      <div class="row-actions">
+        <button class="btn" id="addGameBtn">选择进程</button>
       </div>
     </div>
   </section>
 
-  <section class="panel">
-    <h2>自动化规则</h2>
-    <p class="muted">当所有条件同时成立时执行动作。</p>
-    <div id="ruleList" class="rules"></div>
+  <!-- ---------------------------------------------------------- 自动化 -->
+  <section class="page" id="page-rules" hidden>
+    <div class="panel glass">
+      <h2>自动化规则</h2>
+      <p class="muted">当所有条件同时成立时执行动作。</p>
+      <div id="ruleList" class="rules"></div>
 
-    <form id="ruleForm" class="rule-form">
-      <input class="text" id="ruleName" placeholder="规则名称">
-      <select id="ruleKind" class="select">
-        <option value="idle_at_least">空闲至少</option>
-        <option value="idle_below">空闲少于</option>
-        <option value="cpu_below">CPU 低于</option>
-        <option value="cpu_above">CPU 高于</option>
-        <option value="process_running">进程运行中</option>
-        <option value="time_window">时间窗口</option>
-      </select>
-      <input class="text" id="ruleValue" placeholder="值，例如 600 / steam / 09:00-18:00">
-      <select id="ruleAction" class="select">
-        <option value="set_power_plan">切换电源计划</option>
-        <option value="keep_awake">保持唤醒</option>
-        <option value="lock_screen">锁屏</option>
-      </select>
-      <input class="text" id="ruleActionValue" placeholder="动作参数，例如 节能">
-      <button class="btn primary" type="submit">添加</button>
-    </form>
+      <form id="ruleForm" class="rule-form">
+        <input class="text" id="ruleName" placeholder="规则名称">
+
+        <div class="rule-block">
+          <span class="rule-label">条件</span>
+          <select id="ruleKind" class="select">
+            <option value="idle_at_least">空闲至少</option>
+            <option value="idle_below">空闲少于</option>
+            <option value="cpu_below">CPU 低于</option>
+            <option value="cpu_above">CPU 高于</option>
+            <option value="process_running">进程运行中</option>
+            <option value="time_window">时间窗口</option>
+            <option value="day_of_week">星期</option>
+          </select>
+          <div id="ruleValueArea" class="rule-value"></div>
+        </div>
+
+        <div class="rule-block">
+          <span class="rule-label">动作</span>
+          <select id="ruleAction" class="select">
+            <option value="set_power_plan">切换电源计划</option>
+            <option value="keep_awake">保持唤醒</option>
+            <option value="lock_screen">锁屏</option>
+            <option value="run_command">运行程序</option>
+          </select>
+          <div id="ruleActionArea" class="rule-value"></div>
+        </div>
+
+        <button class="btn primary" type="submit">添加规则</button>
+      </form>
+    </div>
   </section>
 
-  <section class="panel">
-    <h2>工具</h2>
-    <div class="toolbar">
-      <label class="switch">
-        <input type="checkbox" id="keepAwakeToggle">
-        <span>保持唤醒</span>
-      </label>
-      <button class="btn" id="lockBtn">立即锁屏</button>
-      <button class="btn ghost" id="refreshBtn">刷新</button>
+  <!-- ------------------------------------------------------------ 系统 -->
+  <section class="page" id="page-system" hidden>
+    <div class="cards">
+      <div class="card glass">
+        <div class="card-label">保持唤醒</div>
+        <div class="card-value" id="keepAwakeValue">关闭</div>
+        <div class="card-actions">
+          <label class="switch">
+            <input type="checkbox" id="keepAwakeToggle">
+            <span>让机器不休眠</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="card glass">
+        <div class="card-label">服务器模式</div>
+        <div class="card-value" id="serverValue">关闭</div>
+        <div class="card-actions">
+          <label class="switch">
+            <input type="checkbox" id="serverToggle">
+            <span>持续防睡眠</span>
+          </label>
+          <span class="hint">空闲 <input id="serverLockMinutes" class="num" type="number" min="1" step="1"> 分钟后锁屏</span>
+        </div>
+      </div>
+
+      <div class="card glass">
+        <div class="card-label">定时睡眠</div>
+        <div class="card-value" id="scheduleValue">未设置</div>
+        <div class="card-actions">
+          <span class="hint">在 <input id="sleepClock" class="num" type="time"> 睡觉</span>
+          <button class="btn" id="scheduleBtn">设置</button>
+          <button class="btn ghost" id="cancelScheduleBtn">取消</button>
+        </div>
+      </div>
+
+      <div class="card glass">
+        <div class="card-label">屏幕</div>
+        <div class="card-value">现在</div>
+        <div class="card-actions">
+          <button class="btn" id="lockBtn">立即锁屏</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel glass">
+      <h2>维护</h2>
+      <div class="toolbar">
+        <button class="btn ghost" id="refreshBtn">刷新</button>
+        <button class="btn ghost" id="uninstallBtn">卸载后台服务</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------ 日志 -->
+  <section class="page" id="page-logs" hidden>
+    <div class="panel glass">
+      <div class="panel-head">
+        <h2 class="grow">日志</h2>
+        <button class="btn ghost" id="openLogBtn">读取</button>
+      </div>
+      <pre class="log" id="logView"></pre>
     </div>
   </section>
 
@@ -95,6 +229,19 @@
   </footer>
 
 </div>
+
+<!-- 进程选择器 -->
+<div class="sheet-backdrop" id="processSheet" hidden>
+  <div class="sheet glass">
+    <div class="sheet-head">
+      <h2>选择进程</h2>
+      <button class="btn ghost" id="closeProcessSheet">关闭</button>
+    </div>
+    <input class="text wide" id="processSearch" placeholder="搜索进程名">
+    <div class="sheet-body" id="processList"></div>
+  </div>
+</div>
+
 <script src="app.js"></script>
 </body>
 </html>

@@ -53,14 +53,18 @@ def run() -> int:
     if not assets.is_dir():
         raise RuntimeError(f"the interface files are missing: {assets}")
 
-    webview.create_window(
+    bridge = Bridge()
+    window = webview.create_window(
         WINDOW_TITLE,
         str(assets / "index.html"),
-        js_api=Bridge(),
+        js_api=bridge,
         width=WINDOW_SIZE[0],
         height=WINDOW_SIZE[1],
         min_size=(720, 560),
     )
+    # The bridge needs the window to open the file dialog, and the
+    # window only exists after it has been created.
+    bridge.attach_window(window)
     webview.start()
     return 0
 

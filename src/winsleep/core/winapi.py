@@ -282,3 +282,55 @@ def lock_workstation() -> bool:
         return bool(_user32().LockWorkStation())
     except (OSError, AttributeError):
         return False
+
+
+# ---------------------------------------------------------------- suspend
+
+
+def suspend(hibernate: bool = False) -> bool:
+    """Put the machine to sleep.  True when the call went through.
+
+    The privilege to do this has to be taken first; a plain user
+    process does not have it, and without it the call fails with no
+    useful message.
+    """
+    if not is_supported():
+        return False
+    try:
+        kernel32 = _kernel32()
+        advapi32 = ctypes.windll.advapi32
+
+        # SeShutdownPrivilege
+        privilege = wintypes.LUID()
+        token = wintypes.HANDLE()
+        if not advapi32.OpenProcessToken(
+            kernel32.GetCurrentProcess(),
+            0x0008 | 0x0020,  # TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY
+            ctypes.byref(token),
+        ):
+            return False
+
+        if not advapi32.LookupPrivilegeValueW(
+            None, "SeShutdownPrivilege", ctypes.byref(privilege)
+        ):
+            return False
+
+        entry = wintypes.LUID_AND_ATTRIBUTES()
+        entry.Luid = privilege
+        entry.Attributes = 0x00000002  # SE_PRIVILEGE_ENABLED
+
+        if not advapi32.AdjustTokenPrivileges(
+            token, False, ctypes.byref(entry), 0, None, None
+        ):
+            return False
+
+        # The last argument has to be a critical section, so one is
+        # made here.  It is never entered, the call only checks that
+        # the pointer is valid.
+        critical = ctypes.create_string_buffer(64)
+
+        # 0 = hibernate, 1 = sleep
+        state = 0 if hibernate else 1
+        return bool(kernel32.SetSuspendState(state, 0, ctypes.byref(critical)))
+    except (OSError, AttributeError, ValueError):
+        return False

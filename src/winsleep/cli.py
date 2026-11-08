@@ -209,6 +209,20 @@ def _cmd_switch(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _cmd_sleep(args: argparse.Namespace) -> int:
+    """Put the machine to sleep now.
+
+    The scheduled task of a timed sleep runs this, so the machine goes
+    to sleep the same way no matter how it was triggered.
+    """
+    ok = winapi.suspend(hibernate=args.hibernate)
+    if ok:
+        print("the machine is going to sleep")
+        return 0
+    print("error: the machine could not be put to sleep")
+    return 1
+
+
 def _cmd_selftest(_args: argparse.Namespace) -> int:
     """Check that everything the program needs is really in the bundle.
 
@@ -282,6 +296,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "selftest", help="check that the bundle is complete"
     ).set_defaults(func=_cmd_selftest)
+
+    sleep = sub.add_parser("sleep", help="put the machine to sleep now")
+    sleep.add_argument(
+        "--hibernate", action="store_true", help="hibernate instead of sleep"
+    )
+    sleep.set_defaults(func=_cmd_sleep)
 
     return parser
 

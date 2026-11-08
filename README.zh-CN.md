@@ -7,7 +7,7 @@
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Release](https://img.shields.io/badge/release/Mofan2020/DeepSleepForWindows)
 
-- **版本**：0.1.0
+- **版本**：0.2.0
 - **语言**：Python 3.11+，pywebview
 - **协议**：MIT
 
@@ -23,7 +23,8 @@ DeepSleep For Windows 替你做这件事，还允许你在这基础上写自己�
 - **游戏检测** —— 游戏进程在跑时保持高性能计划，并让机器不休眠。
 - **服务器模式** —— 持续防睡眠，空闲一段时间后自动锁屏。
 - **自动化规则** —— 把空闲时长、CPU 占用、进程是否运行、时间段、星期几组合起来，全部成立时执行动作。
-- **后台常驻** —— 两个计划任务，一个跑守护进程，一个跑在用户会话里，随时关窗口都不影响。
+- **后台常驻** —— 两个计划任务，一个跑守护进程，一个跑在用户会话里，随时关窗口都不影响。装、启、停都能在窗口里点。
+- **自己的电源计划** —— 复制一个计划，改它里面的内容：多久关显示、多久睡觉、多久休眠、处理器最低降到多少。
 - **要窗口的话也有** —— 一个 pywebview 小界面，看状态、改设置、管规则。
 
 ## 工作原理
@@ -37,13 +38,13 @@ DeepSleepForWindows daemon    session 0    电源计划、规则、保持唤醒
 DeepSleepForWindows agent     session 1    读真实空闲时间、锁屏
 ```
 
-agent 是唯一和 Win32 API 打交道的地方。其余部分 —— 规则引擎、配置存储、电源计划处理、计划任务 —— 全是普通 Python，或者调用 Windows 自带的命令行工具。没有 pywin32，没有 .NET，没有 PowerShell。
+agent 是唯一和 Win32 API 打交道的地方。规则引擎、配置存储、电源计划处理全是普通 Python。系统数据来自 Windows API、注册表或 `psutil`，**从不解析命令行的输出** —— 那是本地化的，在德国机器上和在中国机器上读出来的东西不一样。没有 pywin32，没有 .NET，没有 PowerShell。
 
 ## 安装
 
 从 [Releases](https://github.com/Mofan2020/DeepSleepForWindows/releases) 下载 zip，解压出来就是**一个 `DeepSleepForWindows.exe`**，别的什么都没有。放在哪儿都行，双击就能用。
 
-注册后台任务（在 cmd 或 PowerShell 里跑）：
+注册后台任务：在窗口里点「安装并启动」就行。也可以在 cmd 或 PowerShell 里跑：
 
 ```bat
 DeepSleepForWindows.exe install
@@ -92,7 +93,8 @@ DeepSleepForWindows uninstall            移除计划任务
   "server_mode": false,
   "server_lock_seconds": 300,
   "keep_awake": false,
-  "rules": []
+  "rules": [],
+  "last_plan_guid": ""
 }
 ```
 
@@ -100,8 +102,8 @@ DeepSleepForWindows uninstall            移除计划任务
 
 | 条件 | 取值 | 含义 |
 | --- | --- | --- |
-| `idle_at_least` | 秒 | 空闲时间达到这个值。 |
-| `idle_below` | 秒 | 空闲时间小于这个值。 |
+| `idle_at_least` | 秒 | 空闲时间达到这个值。也能带单位：`10m`、`2h`、`1d`。 |
+| `idle_below` | 秒 | 空闲时间小于这个值。也能带单位。 |
 | `cpu_below` | 百分比 | CPU 占用低于这个值。 |
 | `cpu_above` | 百分比 | CPU 占用达到或高于这个值。 |
 | `process_running` | 进程名 | 某个进程在运行。`.exe` 可写可不写。 |

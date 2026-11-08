@@ -23,6 +23,7 @@ import socket
 import threading
 import time
 from collections.abc import Callable
+from typing import Any
 
 from . import config as config_mod
 from . import paths, winapi, winpower
@@ -151,6 +152,12 @@ class StateServer:
         kind = message.get("kind")
         if kind == "ping":
             return json.dumps({"ok": True, "kind": "pong"}).encode("utf-8")
+        if kind == "set_plan_settings":
+            return self._set_plan_settings(message)
+        if kind == "duplicate_plan":
+            return self._duplicate_plan(message)
+        if kind == "delete_plan":
+            return self._delete_plan(message)
         if kind == "report":
             try:
                 idle = float(message.get("idle_seconds", -1.0))
@@ -182,6 +189,58 @@ class StateServer:
         and the agent picks it up the next time it reports.
         """
         self.agent.lock_requested = True
+
+    # -- the contents of a power plan -------------------------------------
+
+    def _set_plan_settings(self, message: dict[str, Any]) -> bytes:
+        """Write the settings of a power plan.
+
+        This runs in the daemon because the settings live under
+        ``HKEY_LOCAL_MACHINE`` and only an administrator may write
+        them.  The daemon runs as SYSTEM, so it can.
+        """
+        from . import powersettings
+
+        guid = str(message.get("guid", ""))
+        changes = message.get("changes", []) or []
+        if not guid:
+            return json.dumps({"ok": False, "message": "没有指定电源计划"}).encode("utf-8")
+        ok, detail = powersettings.apply_settings(guid, list(changes))
+        if ok:
+            log.info("the settings of the plan %s were changed", guid)
+        else:
+            log.warning("the settings of the plan %s could not be changed: %s", guid, detail)
+        return json.dumps({"ok": ok, "message": detail}, ensure_ascii=False).encode("utf-8")
+
+    def _duplicate_plan(self, message: dict[str, Any]) -> bytes:
+        """Copy a power plan."""
+        from . import powersettings
+
+        guid = str(message.get("guid", ""))
+        name = str(message.get("name", "")).strip()
+        if not guid:
+            return json.dumps({"ok": False, "message": "没有指定电源计划"}).encode("utf-8")
+        if not name:
+            return json.dumps({"ok": False, "message": "没有给新计划起名字"}).encode("utf-8")
+        ok, detail = powersettings.duplicate_plan(guid, name)
+        if ok:
+            log.info("the plan %s was copied to %s", guid, detail)
+        return json.dumps(
+            {"ok": ok, "message": detail, "guid": detail if ok else ""},
+            ensure_ascii=False,
+        ).encode("utf-8")
+
+    def _delete_plan(self, message: dict[str, Any]) -> bytes:
+        """Delete a power plan."""
+        from . import powersettings
+
+        guid = str(message.get("guid", ""))
+        if not guid:
+            return json.dumps({"ok": False, "message": "没有指定电源计划"}).encode("utf-8")
+        ok, detail = powersettings.delete_plan(guid)
+        if ok:
+            log.info("the plan %s was deleted", guid)
+        return json.dumps({"ok": ok, "message": detail}, ensure_ascii=False).encode("utf-8")
 
 
 class Daemon:

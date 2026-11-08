@@ -21,7 +21,96 @@ __all__ = [
     "Rule",
     "Snapshot",
     "evaluate",
+    "parse_duration",
+    "parse_number",
 ]
+
+
+#: The units a duration may be written in.  The value is in seconds.
+_DURATION_UNITS = {
+    "": 1,
+    "s": 1,
+    "sec": 1,
+    "secs": 1,
+    "second": 1,
+    "seconds": 1,
+    "m": 60,
+    "min": 60,
+    "mins": 60,
+    "minute": 60,
+    "minutes": 60,
+    "h": 3600,
+    "hr": 3600,
+    "hrs": 3600,
+    "hour": 3600,
+    "hours": 3600,
+    "d": 86400,
+    "day": 86400,
+    "days": 86400,
+}
+
+
+def parse_number(text: str) -> float | None:
+    """Read a plain number, with an optional ``%`` after it.
+
+    Used for the CPU thresholds, which are percentages and not
+    durations.
+    """
+    raw = text.strip()
+    if raw.endswith("%"):
+        raw = raw[:-1].strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def parse_duration(text: str) -> float | None:
+    """Read a duration and return it in seconds.
+
+    A plain number is a number of seconds.  A unit may be written
+    after it - ``"10m"``, ``"2h"``, ``"1d"`` - and is understood in
+    English and in Chinese (``"10分钟"``, ``"2小时"``).  ``None`` is
+    returned when the text is not a duration at all.
+    """
+    raw = text.strip().lower()
+    if not raw:
+        return None
+
+    # A Chinese unit can be longer than one character, so it is
+    # looked for before the single letter ones.
+    for suffix, factor in (
+        ("毫秒", 0.001),
+        ("秒", 1),
+        ("分钟", 60),
+        ("分", 60),
+        ("小时", 3600),
+        ("时", 3600),
+        ("天", 86400),
+    ):
+        if raw.endswith(suffix):
+            number = raw[: -len(suffix)].strip()
+            try:
+                return float(number) * factor
+            except ValueError:
+                return None
+
+    # Split the number from the unit.
+    index = 0
+    while index < len(raw) and (raw[index].isdigit() or raw[index] in ".+-"):
+        index += 1
+    number_text = raw[:index].strip()
+    unit_text = raw[index:].strip()
+
+    if not number_text:
+        return None
+    factor = _DURATION_UNITS.get(unit_text)
+    if factor is None:
+        return None
+    try:
+        return float(number_text) * factor
+    except ValueError:
+        return None
 
 
 # --------------------------------------------------------------------- model
@@ -83,6 +172,12 @@ class Condition:
     ``day_of_week``
         Today is one of the days listed in ``value`` (comma separated
         names, e.g. ``mon,tue``).
+
+    The number in ``value`` is always in seconds for the time based
+    conditions and in percent for the CPU ones.  A number with a unit
+    written after it - ``"10m"``, ``"2h"`` - is understood as well, so
+    a rule written by hand can say what it means.  :func:`parse_duration`
+    does the parsing.
     """
 
     kind: str
@@ -228,30 +323,26 @@ def _condition_holds(condition: Condition, snap: Snapshot) -> bool:
     value = condition.value
 
     if kind == "idle_at_least":
-        try:
-            threshold = float(value)
-        except ValueError:
+        threshold = parse_duration(value)
+        if threshold is None:
             return False
         return snap.idle_seconds >= threshold
 
     if kind == "idle_below":
-        try:
-            threshold = float(value)
-        except ValueError:
+        threshold = parse_duration(value)
+        if threshold is None:
             return False
         return snap.idle_seconds < threshold
 
     if kind == "cpu_below":
-        try:
-            threshold = float(value)
-        except ValueError:
+        threshold = parse_number(value)
+        if threshold is None:
             return False
         return snap.cpu_percent < threshold
 
     if kind == "cpu_above":
-        try:
-            threshold = float(value)
-        except ValueError:
+        threshold = parse_number(value)
+        if threshold is None:
             return False
         return snap.cpu_percent >= threshold
 
