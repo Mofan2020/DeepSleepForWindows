@@ -31,6 +31,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
+          # The runtime dependencies (pywebview and psutil) live in
+          # pyproject.toml.  They have to be installed as well, or the
+          # bundle is built without the window.
+          pip install .
 
       - name: Lint (ruff)
         run: ruff check .
@@ -62,6 +66,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
+          # The runtime dependencies (pywebview and psutil) live in
+          # pyproject.toml.  They have to be installed as well, or the
+          # bundle is built without the window.
+          pip install .
 
       # The core is checked on Linux above; these tests need a real
       # Windows machine because they call powercfg and the Win32 API.
@@ -141,6 +149,21 @@ jobs:
           Write-Host $text
           if ($proc.ExitCode -ne 0) { Write-Error "the executable exited with $($proc.ExitCode)"; exit 1 }
           if ($text -notmatch '[0-9a-fA-F]{8}-') { Write-Error "the power plans were not listed"; exit 1 }
+
+      # A frozen build can be missing a module without noticing until
+      # the window is opened.  The bundle is asked whether it has
+      # everything, before the release is made.
+      - name: Check that the bundle is complete
+        shell: pwsh
+        run: |
+          $exe = "dist\DeepSleepForWindows.exe"
+          $out = Join-Path $env:RUNNER_TEMP "selftest.txt"
+          $proc = Start-Process -FilePath $exe -ArgumentList "selftest" `
+            -Wait -PassThru -NoNewWindow -RedirectStandardOutput $out `
+            -RedirectStandardError (Join-Path $env:RUNNER_TEMP "selftest_err.txt")
+          Get-Content $out -Raw | Write-Host
+          Get-Content (Join-Path $env:RUNNER_TEMP "selftest_err.txt") -Raw | Write-Host
+          if ($proc.ExitCode -ne 0) { Write-Error "the bundle is missing something"; exit 1 }
 
       - name: Package (zip)
         shell: pwsh

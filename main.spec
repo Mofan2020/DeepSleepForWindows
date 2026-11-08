@@ -22,6 +22,25 @@ PROJECT_ROOT = Path(SPECPATH).resolve()
 
 block_cipher = None
 
+
+def _webview_modules():
+    """Every module of pywebview, including the ones it imports late.
+
+    pywebview picks its platform backend at runtime, so the backend
+    modules are never imported by the code that PyInstaller can see.
+    Without them the bundle starts and then says "no module named
+    webview", which is exactly what a missing hidden import looks like
+    from the outside.
+    """
+    try:
+        from PyInstaller.utils.hooks import collect_submodules
+    except ImportError:
+        return ["webview"]
+    modules = collect_submodules("webview")
+    # pythonnet is what the Windows backend talks to the .NET runtime
+    # through; it is loaded by name at runtime as well.
+    return sorted(set(modules) | {"webview", "clr"})
+
 a = Analysis(
     ["src/winsleep/__main__.py"],
     pathex=[str(PROJECT_ROOT / "src")],
@@ -30,8 +49,7 @@ a = Analysis(
         (str(PROJECT_ROOT / "src" / "winsleep" / "gui" / "assets"),
          "winsleep/gui/assets"),
     ],
-    hiddenimports=[
-        "webview",
+    hiddenimports=_webview_modules() + [
         "winsleep.core.winapi",
         "psutil",
     ],

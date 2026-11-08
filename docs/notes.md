@@ -56,6 +56,29 @@ Windows 的后台服务跑在没有键鼠的会话里。那里的进程**永远�
 
 `process_running` 条件需要真实的进程列表。daemon 把「游戏列表」和「所有规则里出现的进程名」合成一份，一次 `psutil` 查询，5 秒一次，不会因为规则多而变慢。
 
+## 打包时漏掉依赖的坑
+
+0.1.0 发出去，用户双击就报：
+
+```
+the window needs pywebview, which is not part of this build
+```
+
+根因是 CI 只装了 `requirements-dev.txt`（pytest / ruff / pyinstaller），**没装运行时依赖**。运行时依赖写在 `pyproject.toml` 里，但 CI 从来没执行过 `pip install .`，所以 pywebview 根本不在构建环境里，自然也不在包里。
+
+本地也一样：venv 里是 `pip install -e '.[dev]'` 装的，理论上会带运行时依赖，但那个 venv 是早期建的，pywebview 一直没补上。本地只跑了 `--version` 和 `status`，没开过窗口，所以也没发现。
+
+修法：
+
+1. CI 两个 job 都加 `pip install .`
+2. spec 里用 `collect_submodules("webview")` 收全子模块 —— pywebview 的平台后端是运行时按名字 import 的，PyInstaller 看不见。Windows 后端还要 `clr`（pythonnet）。
+3. **加 `selftest` 命令**，打包后问一遍 bundle「你齐了吗」，缺什么列出来。CI 里跑这一步，不过就不发。
+
+第 3 条是关键：靠人肉点开界面才能发现的打包问题，不该靠人肉发现。
+
+**教训**：PyInstaller 的 hidden import 只能覆盖「静态可见」的 import。运行时按名字加载的东西，必须显式收集，并且要有机制在发布前验证。
+
+
 ## 单文件和无控制台窗口
 
 发布的是一个 exe，别的什么都没有。

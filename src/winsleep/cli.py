@@ -209,6 +209,45 @@ def _cmd_switch(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _cmd_selftest(_args: argparse.Namespace) -> int:
+    """Check that everything the program needs is really in the bundle.
+
+    A frozen build can be missing a module without anything complaining
+    until the moment the window is opened.  This command imports the
+    pieces that matter and reports the ones that are not there, so the
+    build can be checked before it is handed out.
+    """
+    import importlib
+
+    wanted = [
+        "webview",
+        "psutil",
+        "winsleep.core.winapi",
+        "winsleep.core.winpower",
+        "winsleep.core.daemon",
+        "winsleep.core.agent",
+    ]
+    if sys.platform == "win32":
+        # The Windows backend is loaded by name at runtime.
+        wanted.append("webview.platforms.winforms")
+        wanted.append("clr")
+    missing = []
+    for name in wanted:
+        try:
+            importlib.import_module(name)
+        except ImportError as exc:
+            missing.append(f"{name} ({exc})")
+
+    if missing:
+        print("these modules are missing from the bundle:")
+        for name in missing:
+            print(f"  - {name}")
+        return 1
+
+    print("everything the program needs is in the bundle")
+    return 0
+
+
 def _cmd_lock(_args: argparse.Namespace) -> int:
     ok = winapi.lock_workstation()
     print("the screen was locked" if ok else "error: could not lock the screen")
@@ -239,6 +278,10 @@ def build_parser() -> argparse.ArgumentParser:
     switch.set_defaults(func=_cmd_switch)
 
     sub.add_parser("lock", help="lock the screen").set_defaults(func=_cmd_lock)
+
+    sub.add_parser(
+        "selftest", help="check that the bundle is complete"
+    ).set_defaults(func=_cmd_selftest)
 
     return parser
 
