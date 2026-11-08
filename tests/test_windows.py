@@ -199,5 +199,5 @@ class TestALegacyCodePage:
         assert result.returncode == 0, result.stderr
 
     def test_the_help_survives_a_legacy_code_page(self):
-        result = _run_cli(env={"PYTHONIOENCODING": "cp1252"})
-        assert result.returncode == 1
+        result = _run_cli("--help", env={"PYTHONIOENCODING": "cp1252"})
+        assert result.returncode == 0

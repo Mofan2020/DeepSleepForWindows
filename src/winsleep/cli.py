@@ -26,6 +26,60 @@ from .core import config as config_mod
 from .core import paths, winapi, winpower
 from .version import APP_NAME, DISPLAY_NAME, __version__
 
+log = logging.getLogger("winsleep.cli")
+
+
+def _attach_parent_console() -> None:
+    """Use the console of the shell that started the program.
+
+    The program is built without a console window, so a command run
+    from a terminal has nowhere to print to.  Windows will give the
+    console of the parent process to a program that asks for it, and
+    the output then lands in the terminal the user typed the command
+    into.  Started from the Explorer there is no console to take and
+    nothing happens - which is the point.
+    """
+    if sys.platform != "win32":
+        return
+    # If the output was redirected to a file there is nothing to do;
+    # the redirection is more specific than the parent console.
+    if sys.stdout is not None:
+        return
+    try:
+        import ctypes  # noqa: PLC0415 - Windows only
+
+        kernel32 = ctypes.windll.kernel32
+        # ATTACH_PARENT_PROCESS
+        if not kernel32.AttachConsole(-1):
+            return
+        sys.stdout = open("CONOUT$", "w", encoding="utf-8", errors="replace")  # noqa: SIM115
+        sys.stderr = open("CONOUT$", "w", encoding="utf-8", errors="replace")  # noqa: SIM115
+    except Exception:  # noqa: BLE001 - no console is not a reason to stop
+        pass
+
+
+def _show_error(reason: str) -> None:
+    """Tell the user what went wrong and where the log file is.
+
+    There is no console window to print to, so a message box is the
+    only way the user finds out that nothing happened.
+    """
+    text = (
+        f"{DISPLAY_NAME} 启动失败。\n\n"
+        f"原因：{reason}\n\n"
+        f"详细信息在日志文件里：\n{paths.log_path()}"
+    )
+    if sys.platform != "win32":
+        print(text, file=sys.stderr)
+        return
+    try:
+        import ctypes  # noqa: PLC0415 - Windows only
+
+        # MB_OK | MB_ICONERROR
+        ctypes.windll.user32.MessageBoxW(None, text, DISPLAY_NAME, 0x10)
+    except Exception:  # noqa: BLE001 - a failed dialog is the last resort
+        pass
+
 
 def _use_utf8_output() -> None:
     """Make stdout and stderr UTF-8, whatever the console code page is.
@@ -70,10 +124,26 @@ def _setup_logging(verbose: bool) -> None:
         root.addHandler(stream)
 
 
-def _cmd_gui(_args: argparse.Namespace) -> int:
-    from .gui.app import run
+def _open_window() -> int:
+    """Open the window, and tell the user if that does not work.
 
-    return run()
+    There is no console window in a release build, so a failure has to
+    be shown in a message box.  The reason and the place of the log
+    file are in it, because a user who cannot see the window has no
+    other way to find out what happened.
+    """
+    try:
+        from .gui.app import run
+
+        return run()
+    except Exception as exc:  # noqa: BLE001 - the user has to be told
+        log.exception("the window could not be opened")
+        _show_error(str(exc))
+        return 2
+
+
+def _cmd_gui(_args: argparse.Namespace) -> int:
+    return _open_window()
 
 
 def _cmd_daemon(_args: argparse.Namespace) -> int:
@@ -174,15 +244,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # This has to happen before anything is printed, including the
-    # help text, because the plan names are in the language of the
-    # machine and the console may not be able to encode them.
-    _use_utf8_output()
     parser = build_parser()
     args = parser.parse_args(argv)
+
     if not getattr(args, "func", None):
-        parser.print_help()
-        return 1
+        # Started without a command - that is what happens when the
+        # program is double clicked, so the window is what opens.
+        _setup_logging(args.verbose)
+        return _open_window()
+
+    # A command was given, so the output goes to the shell that started
+    # the program.
+    _attach_parent_console()
+    # This has to happen before anything is printed, because the plan
+    # names are in the language of the machine and the console may not
+    # be able to encode them.
+    _use_utf8_output()
     _setup_logging(args.verbose)
     return int(args.func(args))
 

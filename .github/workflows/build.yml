@@ -118,30 +118,43 @@ jobs:
         run: |
           $exe = "dist\DeepSleepForWindows.exe"
           if (-not (Test-Path $exe)) { Write-Error "the executable was not produced"; exit 1 }
-          # The .exe is a GUI-subsystem binary, so PowerShell neither waits
-          # for it nor sets $LASTEXITCODE.  Run it with --version, which
-          # prints to stdout and exits straight away.
-          $out = & $exe --version 2>&1 | Out-String
-          Write-Host $out
-          if ($out -notmatch 'DeepSleep For Windows') { Write-Error "the executable did not run"; exit 1 }
+          # The .exe is a GUI-subsystem binary: it has no console of its
+          # own, so PowerShell neither waits for it nor catches its
+          # output with &.  Start-Process with a redirected output
+          # file waits for it and gives the output back.
+          $out = Join-Path $env:RUNNER_TEMP "version.txt"
+          $proc = Start-Process -FilePath $exe -ArgumentList "--version" `
+            -Wait -PassThru -NoNewWindow -RedirectStandardOutput $out
+          $text = (Get-Content $out -Raw)
+          Write-Host $text
+          if ($proc.ExitCode -ne 0) { Write-Error "the executable exited with $($proc.ExitCode)"; exit 1 }
+          if ($text -notmatch 'DeepSleep For Windows') { Write-Error "the executable did not run"; exit 1 }
 
       - name: Smoke test the command line
         shell: pwsh
         run: |
           $exe = "dist\DeepSleepForWindows.exe"
-          $out = & $exe plans 2>&1 | Out-String
-          Write-Host $out
-          if ($out -notmatch '[0-9a-fA-F]{8}-') { Write-Error "powercfg was not parsed"; exit 1 }
+          $out = Join-Path $env:RUNNER_TEMP "plans.txt"
+          $proc = Start-Process -FilePath $exe -ArgumentList "plans" `
+            -Wait -PassThru -NoNewWindow -RedirectStandardOutput $out
+          $text = (Get-Content $out -Raw)
+          Write-Host $text
+          if ($proc.ExitCode -ne 0) { Write-Error "the executable exited with $($proc.ExitCode)"; exit 1 }
+          if ($text -notmatch '[0-9a-fA-F]{8}-') { Write-Error "the power plans were not listed"; exit 1 }
 
       - name: Package (zip)
         shell: pwsh
         run: |
           $name = "DeepSleepForWindows-Windows-x64"
-          Compress-Archive -Path "dist\DeepSleepForWindows" -DestinationPath "dist\$name.zip" -Force
+          # The build is one file, so the zip holds exactly one .exe.
+          Compress-Archive -Path "dist\DeepSleepForWindows.exe" -DestinationPath "dist\$name.zip" -Force
           Get-ChildItem dist\*.zip | ForEach-Object {
             Write-Host "$($_.Name) -> $($_.Length) bytes"
-            if ($_.Length -lt 3000000) { Write-Error "$($_.Name) looks truncated"; exit 1 }
+            if ($_.Length -lt 5000000) { Write-Error "$($_.Name) looks truncated"; exit 1 }
           }
+          # Nothing but the executable may end up in the zip.
+          $inside = (Expand-Archive -Path "dist\$name.zip" -DestinationPath "$env:RUNNER_TEMP\unpacked" -Force; Get-ChildItem "$env:RUNNER_TEMP\unpacked" -Recurse)
+          if ($inside.Count -ne 1) { Write-Error "the zip holds more than the executable"; exit 1 }
 
       - uses: actions/upload-artifact@v4
         with:

@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import socket
+import sys
 import time
 
 from . import paths, winapi
@@ -117,7 +118,36 @@ def main() -> int:
         run_forever()
     except KeyboardInterrupt:
         pass
+    except Exception as exc:  # noqa: BLE001 - the user has to be told
+        # The agent runs in the user's own session, so it has a
+        # desktop and can put a message box on it.  Without a console
+        # window this is the only way the user finds out that the
+        # agent stopped.
+        log.exception("the agent stopped")
+        _show_error(str(exc))
+        return 1
     return 0
+
+
+def _show_error(reason: str) -> None:
+    """Tell the user that the agent stopped, and why."""
+    from ..version import DISPLAY_NAME  # noqa: PLC0415 - avoids a cycle
+
+    text = (
+        f"{DISPLAY_NAME} 的后台代理停止了。\n\n"
+        f"原因：{reason}\n\n"
+        f"详细信息在日志文件里：\n{paths.log_path()}"
+    )
+    if sys.platform != "win32":
+        print(text, file=sys.stderr)
+        return
+    try:
+        import ctypes  # noqa: PLC0415 - Windows only
+
+        # MB_OK | MB_ICONERROR
+        ctypes.windll.user32.MessageBoxW(None, text, DISPLAY_NAME, 0x10)
+    except Exception:  # noqa: BLE001 - a failed dialog is the last resort
+        pass
 
 
 if __name__ == "__main__":

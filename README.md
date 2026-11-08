@@ -55,27 +55,34 @@ Python or a call to a command line tool Windows already ships (`powercfg`,
 
 ## Install
 
-Download the `.exe` from [Releases](https://github.com/Mofan2020/DeepSleepForWindows/releases),
-unzip it somewhere, and run:
+Download the zip from [Releases](https://github.com/Mofan2020/DeepSleepForWindows/releases).
+Unpacking it gives you **one `DeepSleepForWindows.exe`**, nothing else. Put it
+wherever you like and start it by double clicking it.
+
+To register the background tasks (run this in cmd or PowerShell):
 
 ```bat
-DeepSleepForWindows install
+DeepSleepForWindows.exe install
 ```
 
 That registers two scheduled tasks. The daemon starts at logon, and the agent
 starts in your own session so it can read the real idle time.
 
-To open the window:
+To open the window: double click the exe, or
 
 ```bat
-DeepSleepForWindows gui
+DeepSleepForWindows.exe gui
 ```
 
 To remove everything:
 
 ```bat
-DeepSleepForWindows uninstall
+DeepSleepForWindows.exe uninstall
 ```
+
+The program has no console window, so double clicking it does not flash a black
+box. When something goes wrong it shows a message box with the reason and the
+place of the log file.
 
 ## Command line
 

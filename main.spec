@@ -1,9 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller build for DeepSleep For Windows.
 
-The bundle is a one-folder build rather than a one-file build: the GUI
-loads its HTML from disk, and keeping the assets as real files means
-they can be read with ordinary file calls and are easy to replace.
+The build is a **one-file** build: the result is a single
+``DeepSleepForWindows.exe`` that can be copied anywhere and started by
+double clicking it.  Nothing else has to sit next to it.
+
+The price of one file is that the bundle is unpacked into a temporary
+directory every time it starts, so the first start takes a moment
+longer and the program needs a writable temporary directory.  Both are
+acceptable for a tool that runs in the background and is started once
+per logon.
 
 Run it with:
 
@@ -54,32 +60,30 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+# One file: the binaries and the data go into the executable itself.
+# There is no COLLECT step, so nothing is left next to the .exe.
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
     name="DeepSleepForWindows",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,  # the command line has to work; the GUI is opened with "gui"
-    disable_windowed_traceback=False,
+    # No console window: the program is started by double clicking it
+    # and a black rectangle behind the window would look like a
+    # mistake.  The command line commands still work because the
+    # program attaches to the console of the shell that started it.
+    console=False,
+    # The program shows its own error dialog, with the reason and the
+    # place of the log file, so the raw traceback window is not wanted.
+    disable_windowed_traceback=True,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
     icon=str(PROJECT_ROOT / "assets" / "icon.ico"),
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name="DeepSleepForWindows",
 )

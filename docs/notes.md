@@ -56,6 +56,25 @@ Windows 的后台服务跑在没有键鼠的会话里。那里的进程**永远�
 
 `process_running` 条件需要真实的进程列表。daemon 把「游戏列表」和「所有规则里出现的进程名」合成一份，一次 `psutil` 查询，5 秒一次，不会因为规则多而变慢。
 
+## 单文件和无控制台窗口
+
+发布的是一个 exe，别的什么都没有。
+
+PyInstaller 原来是 one-folder（`dist/名字/名字.exe` + `_internal/`），改成 one-file（`EXE` 里直接带 `a.binaries` 和 `a.datas`，去掉 `COLLECT`）。代价是每次启动都要把包解到临时目录，启动慢一点，而且要有可写的临时目录。
+
+`console=False` 之后程序没有自己的控制台窗口，双击不会闪黑框。但这样一来命令行就没地方输出了。解法是 `AttachConsole(ATTACH_PARENT_PROCESS)`：程序启动时问父进程要控制台。
+
+- 从 cmd / PowerShell 里跑 → 父进程有控制台 → 接上 → 输出正常
+- 从资源管理器双击 → 父进程是 explorer，没有控制台 → 接不上 → 什么都不发生，这正是想要的
+- 输出被重定向到文件时（`sys.stdout` 不为 None）→ 不接，保留重定向
+
+注意 `sys.stdout is None` 才是「没有控制台」的判据。GUI 子系统的程序在 PowerShell 里用 `&` 启动，PowerShell 既不等它也捕获不到它的输出。CI 里改用 `Start-Process -Wait -RedirectStandardOutput`。
+
+失败提示：没有控制台窗口，错误就没人看得见。所以窗口打不开时弹 `MessageBoxW`，里面写清楚原因和日志文件的路径。agent 跑在用户会话里，有桌面，也弹。daemon 在 session 0，弹不出来，只能写日志。
+
+one-file 下 `__file__` 指向解包目录，`gui/app.py` 里加了 `sys._MEIPASS` 的兜底。
+
+
 ## 状态纠偏
 
 macOS 原版在 `SleepController.swift` 里会检查实际的 `disablesleep`，发现被外部改了立刻写回去。Windows 版对电源计划做同样的事：

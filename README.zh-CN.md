@@ -41,25 +41,29 @@ agent 是唯一和 Win32 API 打交道的地方。其余部分 —— 规则引�
 
 ## 安装
 
-从 [Releases](https://github.com/Mofan2020/DeepSleepForWindows/releases) 下载 `.exe`，解压后运行：
+从 [Releases](https://github.com/Mofan2020/DeepSleepForWindows/releases) 下载 zip，解压出来就是**一个 `DeepSleepForWindows.exe`**，别的什么都没有。放在哪儿都行，双击就能用。
+
+注册后台任务（在 cmd 或 PowerShell 里跑）：
 
 ```bat
-DeepSleepForWindows install
+DeepSleepForWindows.exe install
 ```
 
 这会注册两个计划任务。守护进程在登录时启动，agent 跑在你自己的会话里，所以它能读到真实的空闲时间。
 
-打开窗口：
+打开窗口：双击那个 exe，或者：
 
 ```bat
-DeepSleepForWindows gui
+DeepSleepForWindows.exe gui
 ```
 
 全部卸载：
 
 ```bat
-DeepSleepForWindows uninstall
+DeepSleepForWindows.exe uninstall
 ```
+
+程序没有控制台窗口，双击运行不会弹黑框。出问题时会弹一个对话框，写着失败原因和日志文件的位置。
 
 ## 命令行
 

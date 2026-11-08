@@ -17,6 +17,25 @@ log = logging.getLogger("winsleep.gui")
 
 ASSETS_DIR = Path(__file__).resolve().parent / "assets"
 
+
+def _assets_dir() -> Path:
+    """Where the interface files are.
+
+    In a one-file build everything is unpacked into a temporary
+    directory first, and the module path points into it, so the usual
+    ``next to the file`` rule still works.  The fallback covers the
+    case where the module itself was kept inside the archive and only
+    the data was unpacked.
+    """
+    if ASSETS_DIR.is_dir():
+        return ASSETS_DIR
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidate = Path(meipass) / "winsleep" / "gui" / "assets"
+        if candidate.is_dir():
+            return candidate
+    return ASSETS_DIR
+
 WINDOW_TITLE = "DeepSleep For Windows(Beta)"
 WINDOW_SIZE = (940, 720)
 
@@ -25,20 +44,18 @@ def run() -> int:
     """Open the window.  Returns the process exit code."""
     try:
         import webview
-    except ImportError:
-        print(
-            "pywebview is not installed.  Install it with: pip install pywebview",
-            file=sys.stderr,
-        )
-        return 2
+    except ImportError as exc:
+        raise RuntimeError(
+            "the window needs pywebview, which is not part of this build"
+        ) from exc
 
-    if not ASSETS_DIR.is_dir():
-        print(f"the interface files are missing: {ASSETS_DIR}", file=sys.stderr)
-        return 2
+    assets = _assets_dir()
+    if not assets.is_dir():
+        raise RuntimeError(f"the interface files are missing: {assets}")
 
     webview.create_window(
         WINDOW_TITLE,
-        str(ASSETS_DIR / "index.html"),
+        str(assets / "index.html"),
         js_api=Bridge(),
         width=WINDOW_SIZE[0],
         height=WINDOW_SIZE[1],
