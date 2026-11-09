@@ -422,3 +422,34 @@ v0.3.0 完全没有更新流程，而程序是单文件、还被计划任务指�
 - `> "%RESULT%"` 里的 `>` 前面的 `1` 会被 cmd 当成重定向 stdin（`1>` 是重定向标准输入！），文件写不出来。去掉那个 `1`。
 - 结果文件所在的目录可能已经没了（程序启动时才建，脚本是在程序退出后才跑的）。脚本里先 `mkdir`。
 - 脚本自己的工作目录最后会被删掉，而 Windows 不允许删掉当前所在的目录。脚本开头 `cd /d "%TEMP%"`。
+
+### v0.3.2：日志文件写不进去（真正的根因）
+
+v0.3.1 修好了提权崩溃，但日志还是空的。继续在真机上查，这次查到了底。
+
+**日志文件是谁建的，权限就跟谁走。** 窗口启动时是提权的（改电源计划要管理员权限），所以它建的日志文件归管理员所有：
+
+```
+C:\ProgramData\DeepSleepForWindows\winsleep.log
+    NT AUTHORITY\SYSTEM      FullControl
+    BUILTIN\Administrators   FullControl
+    BUILTIN\Users            ReadAndExecute, Synchronize   ← 只能读
+```
+
+而**守护进程是普通用户跑的计划任务**（LogonType 是 InteractiveToken，没有管理员权限），它写不进去。同一台机器上 `winsleep.port` 是任务自己建的，权限里就有用户本人——差别只在于谁先建的。
+
+实测证据：任务启动的守护进程写 `winsleep.port`（00:58:52）但日志一个字节都没长（`grew=0`）；用批处理手工启动的同一个 exe，日志就正常长。SSH 里 `echo >>` 追加成功，是因为**那个会话是提权的**，普通用户追加则失败。
+
+**修法**：程序在设置日志时，先看**用户本人**（不是当前进程）有没有写权限，没有就补上。用 `icacls` 做，不用 API：
+
+```python
+icacls <log> /grant "<DOMAIN\user>:(F)"
+```
+
+**为什么不用 API**：控制访问列表的 API 是一堆结构和偏移量，写错一个不会报错，只是**什么都没发生**。这次为了修它试了 ctypes 版本，连踩四个坑：ctypes 不声明 argtypes 会猜错参数（`GetTokenInformation` 返回成功但 sid 读出来是 `None`）；`GetNamedSecurityInfoW` 的第 6 个参数是**指针到指针**不是指针到结构；`TOKEN_USER` 里的 sid 指针指向缓冲区，函数返回后缓冲区被回收，sid 就成了野指针；Windows 给回的 DACL **正好是它需要的大小**，没有空间加条目，`AddAccessAllowedAce` 直接失败（返回 0），得自己复制一份更大的出来。
+
+四个坑每一个都是「不报错但没效果」。icacls 一条命令就做对了。
+
+**判断依据不能用 AccessCheck**：那个问的是**当前进程**的权限。窗口是提权的（属于 Administrators），守护进程不是。要问的是「用户本人能不能写」，所以走的是 DACL 里**用户自己**的那一条，不看组成员——否则提权进程会以为自己能写，就什么也不改。
+
+新增 `core/acl.py` 和 `tests/test_acl.py`。

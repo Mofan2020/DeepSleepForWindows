@@ -136,6 +136,10 @@ def _setup_logging(verbose: bool) -> None:
 
     try:
         paths.app_dir().mkdir(parents=True, exist_ok=True)
+        # The log file may have been made by an elevated run, and then
+        # only the administrators may write to it.  The daemon runs as
+        # the plain user and could not write a single line into it.
+        _make_log_writable()
         handler: logging.Handler = logging.handlers.RotatingFileHandler(
             paths.log_path(), maxBytes=512 * 1024, backupCount=2, encoding="utf-8"
         )
@@ -148,6 +152,23 @@ def _setup_logging(verbose: bool) -> None:
         stream = logging.StreamHandler()
         stream.setFormatter(formatter)
         root.addHandler(stream)
+
+
+def _make_log_writable() -> None:
+    """Let the user write to the log file.
+
+    The file is made by whichever copy of the program starts first.
+    When that one is the window - and the window asks for administrator
+    rights - the file belongs to the administrators, and the daemon,
+    which runs as the plain user, cannot write to it.
+
+    The change is made by the copy that is running now, because that
+    is the one that can: the window runs with administrator rights and
+    the daemon does not.
+    """
+    from .core import acl
+
+    acl.make_user_writable(paths.log_path())
 
 
 

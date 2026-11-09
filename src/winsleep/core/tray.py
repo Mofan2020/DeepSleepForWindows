@@ -119,7 +119,14 @@ def run_tray(
 
     icon = make_icon()
     if icon is None:
+        log.warning("the icon for the notification area could not be made")
         return 1
+
+    # The icon is there now.  Saying so in the log is what tells the
+    # user whether the icon is there or not - the notification area is
+    # hidden behind the little arrow more often than not, and the
+    # question "is it working?" has only one honest answer.
+    log.info("the icon is in the notification area")
 
     def _quit(icon_obj: Any = None, item: Any = None) -> None:
         try:
