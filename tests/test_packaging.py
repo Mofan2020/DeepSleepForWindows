@@ -32,7 +32,7 @@ def _spec_literal(name: str) -> list[str]:
             if keyword.arg != name:
                 continue
             value = keyword.value
-            if not isinstance(value, (ast.List, ast.Tuple)):
+            if not isinstance(value, ast.List | ast.Tuple):
                 continue
             items = []
             for element in value.elts:
