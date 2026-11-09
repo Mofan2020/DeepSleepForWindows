@@ -237,3 +237,33 @@ def test_two_ticks_with_the_same_decision_write_one_line(caplog):
         if "the plan should be" in record.getMessage()
     ]
     assert len(lines) == 1, lines
+
+
+def test_the_daemon_does_not_write_a_line_about_every_trim(caplog, tmp_path):
+    """The trim must not leave a trail behind.
+
+    A line saying "the log was trimmed" is itself a line in the log.
+    The file goes over the limit again right away, so the next trim
+    takes that line away again and writes a new one - and the file is
+    rewritten every minute for ever, with a trail of "trimmed" lines
+    in it.
+    """
+    from winsleep.core import daemon as daemon_mod
+    from winsleep.core import logs
+
+    path = tmp_path / "winsleep.log"
+    path.write_text("".join(f"line {n}\n" for n in range(10)), encoding="utf-8")
+
+    daemon = daemon_mod.Daemon()
+    daemon._config_path = tmp_path / "config.json"
+    daemon._last_log_trim = 0.0
+
+    config = daemon_mod.config_mod.Config(log_max_lines=5)
+    daemon_mod.paths.log_path = lambda: path  # type: ignore[assignment]
+
+    with caplog.at_level("INFO", logger="winsleep.daemon"):
+        daemon._trim_log(config)
+
+    assert "trimmed" not in caplog.text
+    # The file is smaller now, and it stays that way.
+    assert len(logs.read_log(path)) == 5

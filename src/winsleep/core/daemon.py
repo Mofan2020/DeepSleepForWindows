@@ -426,11 +426,16 @@ class Daemon:
             )
             if result.get("changed"):
                 logs.prune_rotated(paths.log_path(), keep=1)
-                log.info(
-                    "the log was trimmed: %d lines removed, %d left",
-                    result.get("removed", 0),
-                    result.get("after", 0),
-                )
+                # Nothing is written about the trim here.  A line
+                # saying "the log was trimmed" is itself a line in the
+                # log, so the file goes over the limit again right
+                # away, and the next minute the whole file is written
+                # once more to take that line away again.  The trim
+                # would then run for ever, rewriting the file every
+                # minute and leaving a trail of "trimmed" lines behind.
+                #
+                # The window tells the user when it trims the log on
+                # purpose, which is the moment it is worth knowing.
         except OSError as exc:
             log.warning("the log could not be trimmed: %s", exc)
 

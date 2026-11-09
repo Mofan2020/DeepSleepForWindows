@@ -311,6 +311,15 @@ MUTATIONS: list[tuple[str, Path, str, str]] = [
         "        if intent != self._last_intent:",
     ),
     (
+        "the daemon writes a line about every trim it does",
+        SRC / "core" / "daemon.py",
+        """                logs.prune_rotated(paths.log_path(), keep=1)
+                # Nothing is written about the trim here.""",
+        """                logs.prune_rotated(paths.log_path(), keep=1)
+                log.info("the log was trimmed: %d lines removed", result.get("removed", 0))
+                # Nothing is written about the trim here.""",
+    ),
+    (
         "the lock countdown makes every tick look like a change",
         SRC / "core" / "daemon.py",
         "            and one.lock_screen == other.lock_screen\n"
