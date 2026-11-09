@@ -11,8 +11,33 @@ Two things have to be true for that to work:
 *   The card has to be idle.  A card that is drawing something cannot
     be put to sleep, and forcing it would make the picture stutter.
     The load is read from the performance counters of the driver.
-*   The driver has to be asked.  Windows records the preference per
-    graphics engine in the registry, and the program writes it there.
+*   The driver has to be asked.  Windows records the preference in
+    the registry, and the program writes it there.
+
+**Where the preference is written.**  Windows has two places for it:
+
+``HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences\\DirectXUserGlobalSettings``
+    The setting for the whole machine.  This is a list of settings
+    separated by semicolons, for example
+    ``GpuPreference=2;SwapEffectUpgradeEnable=0;``.  This is what
+    the program writes.
+
+``HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences\\<adapter LUID>``
+    The setting for one graphics adapter, keyed by the LUID that the
+    DXGI interface reports for it.
+
+The program writes the machine-wide setting, because that is the one
+that applies to every program and does not depend on a LUID that
+changes with the display layout.  The per-adapter key is read when it
+is there, so the interface can show what the adapter itself says.
+
+**How the card is found.**  The adapters are read from the registry
+under ``Control\\Video``.  Each adapter has a subkey per driver entry,
+and the NVIDIA one has ``ProviderName`` set to ``NVIDIA``.  The old
+version of this program looked for a ``Settings`` subkey with a
+``GUID`` value in it - that key does not exist on current drivers, so
+the card was never found and the interface always said the feature
+does not apply.
 
 What the program can promise is this: it tells the driver which
 preference to use, and it reports what it could read back.  Whether
@@ -40,7 +65,22 @@ __all__ = [
 
 log = logging.getLogger("winsleep.gpu")
 
+#: Where Windows keeps the preference for the whole machine.
 _PREFERRED_GRAPHICS_KEY = "SOFTWARE\\Microsoft\\DirectX\\UserGpuPreferences"
+
+#: The name of the value that holds the machine-wide settings.
+_GLOBAL_SETTINGS_VALUE = "DirectXUserGlobalSettings"
+
+#: The name of the setting inside that value.
+_GPU_PREFERENCE_SETTING = "GpuPreference"
+
+#: The same name, in lower case.  The comparison against the settings
+#: in the value is made in lower case, so both sides have to be.
+_GPU_PREFERENCE_KEY = _GPU_PREFERENCE_SETTING.lower()
+
+
+#: Where the display adapters are described.
+_VIDEO_KEY = "SYSTEM\\CurrentControlSet\\Control\\Video"
 
 PREFERENCE_SAVER = "2"
 PREFERENCE_PERFORMANCE = "3"
@@ -86,24 +126,31 @@ class GPUState:
         }
 
 
-def _engine_guid() -> str:
-    """The GUID of the graphics engine of the NVIDIA card.
+# ------------------------------------------------------------- the adapter
 
-    It is read from the registry, where Windows records the engine of
-    every adapter it knows.  When there is no NVIDIA card the string
-    is empty, and the program does nothing.
+
+def nvidia_adapters() -> list[str]:
+    """The registry keys of the NVIDIA display adapters.
+
+    Every adapter under ``Control\\Video`` has a subkey per driver
+    entry.  The entry of an NVIDIA card has ``ProviderName`` set to
+    ``NVIDIA``; the entries of the other cards do not.  The path of
+    the entry is what identifies the card.
+
+    The list is empty when there is no NVIDIA card, and also when the
+    registry cannot be read - the two are told apart by the caller.
     """
     if sys.platform != "win32":
-        return ""
+        return []
 
     try:
         import winreg
     except ImportError:
-        return ""
+        return []
 
-    key_path = "SYSTEM\\CurrentControlSet\\Control\\Video"
+    found: list[str] = []
     try:
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, key_path) as root:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _VIDEO_KEY) as root:
             index = 0
             while True:
                 try:
@@ -111,70 +158,137 @@ def _engine_guid() -> str:
                 except OSError:
                     break
                 index += 1
-                found = _adapter_engines(winreg, root, adapter)
-                if found:
-                    return found
+                try:
+                    with winreg.OpenKey(root, adapter) as adapter_key:
+                        entry_index = 0
+                        while True:
+                            try:
+                                entry = winreg.EnumKey(adapter_key, entry_index)
+                            except OSError:
+                                break
+                            entry_index += 1
+                            if _is_nvidia_entry(winreg, adapter_key, entry):
+                                found.append(f"{_VIDEO_KEY}\\{adapter}\\{entry}")
+                except OSError:
+                    continue
     except OSError as exc:
         log.warning("the graphics adapters could not be read: %s", exc)
-    return ""
+    return found
 
 
-def _adapter_engines(winreg, root, adapter: str) -> str:
-    """The engine GUID of one adapter, when it is an NVIDIA one."""
-    try:
-        with winreg.OpenKey(root, adapter) as adapter_key:
-            index = 0
-            while True:
-                try:
-                    entry = winreg.EnumKey(adapter_key, index)
-                except OSError:
-                    break
-                index += 1
-                found = _entry_engine(winreg, adapter_key, entry)
-                if found:
-                    return found
-    except OSError:
-        pass
-    return ""
-
-
-def _entry_engine(winreg, adapter_key, entry: str) -> str:
-    """The engine GUID of one adapter entry, when it is an NVIDIA one."""
+def _is_nvidia_entry(winreg, adapter_key, entry: str) -> bool:
+    """True when the driver entry belongs to an NVIDIA card."""
     try:
         with winreg.OpenKey(adapter_key, entry) as entry_key:
-            try:
-                value, _ = winreg.QueryValueEx(entry_key, "ProviderName")
-            except OSError:
-                return ""
-            if "NVIDIA" not in str(value).upper():
-                return ""
-            try:
-                with winreg.OpenKey(entry_key, "Settings") as settings:
-                    stamp, _ = winreg.QueryValueEx(settings, "GUID")
-                    return str(stamp)
-            except OSError:
-                return ""
+            value, _ = winreg.QueryValueEx(entry_key, "ProviderName")
+    except OSError:
+        return False
+    return "NVIDIA" in str(value).upper()
+
+
+def adapter_description(path: str) -> str:
+    """The name of the card, for example ``NVIDIA GeForce RTX 3060``."""
+    if sys.platform != "win32":
+        return ""
+    try:
+        import winreg
+    except ImportError:
+        return ""
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path) as key:
+            value, _ = winreg.QueryValueEx(key, "DriverDesc")
     except OSError:
         return ""
+    return str(value)
 
 
 def is_nvidia_present() -> bool:
     """True when an NVIDIA card is in the machine."""
-    return bool(_engine_guid())
+    return bool(nvidia_adapters())
 
 
-def _current_preference(guid: str) -> str:
-    """The preference Windows has recorded for that engine."""
+# ------------------------------------------------------------ the settings
+
+
+def _read_global_settings() -> str:
+    """The machine-wide graphics settings, as one string."""
     try:
         import winreg
+    except ImportError:
+        return ""
 
-        with winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, _PREFERRED_GRAPHICS_KEY
-        ) as key:
-            value, _ = winreg.QueryValueEx(key, guid)
-            return str(value)
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _PREFERRED_GRAPHICS_KEY) as key:
+            value, _ = winreg.QueryValueEx(key, _GLOBAL_SETTINGS_VALUE)
     except (OSError, ImportError):
         return ""
+    return str(value)
+
+
+def _global_preference_from(settings: str) -> str:
+    """The preference inside the machine-wide settings, or an empty string.
+
+    The value holds several settings, separated by semicolons, for
+    example ``GpuPreference=2;SwapEffectUpgradeEnable=0;``.  Only the
+    one about the graphics preference is of interest here.
+    """
+    for part in settings.split(";"):
+        part = part.strip()
+        if not part.lower().startswith(f"{_GPU_PREFERENCE_KEY}="):
+            continue
+        value = part.split("=", 1)[1].strip()
+        if value:
+            return value
+    return ""
+
+
+def _global_preference() -> str:
+    """The preference that is set for the whole machine, or an empty string."""
+    return _global_preference_from(_read_global_settings())
+
+
+def _write_global_preference(preference: str) -> None:
+    """Set the preference for the whole machine.
+
+    The other settings in the value are kept: the value holds more
+    than one setting, and dropping them would change something the
+    user did not ask about.
+    """
+    import winreg
+
+    with winreg.CreateKeyEx(
+        winreg.HKEY_CURRENT_USER,
+        _PREFERRED_GRAPHICS_KEY,
+        0,
+        winreg.KEY_SET_VALUE | winreg.KEY_READ,
+    ) as key:
+        try:
+            current, _ = winreg.QueryValueEx(key, _GLOBAL_SETTINGS_VALUE)
+            current = str(current)
+        except OSError:
+            current = ""
+
+        parts = []
+        for part in current.split(";"):
+            part = part.strip()
+            if not part:
+                continue
+            if part.lower().startswith(f"{_GPU_PREFERENCE_KEY}="):
+                continue
+            parts.append(part)
+
+        parts.append(f"{_GPU_PREFERENCE_SETTING}={preference}")
+        winreg.SetValueEx(
+            key,
+            _GLOBAL_SETTINGS_VALUE,
+            0,
+            winreg.REG_SZ,
+            ";".join(parts) + ";",
+        )
+
+
+# -------------------------------------------------------------- the state
 
 
 def gpu_state() -> GPUState:
@@ -182,11 +296,11 @@ def gpu_state() -> GPUState:
     if sys.platform != "win32":
         return GPUState(message="只能在 Windows 上执行")
 
-    guid = _engine_guid()
-    if not guid:
+    adapters = nvidia_adapters()
+    if not adapters:
         return GPUState(message="没有找到 NVIDIA 显卡，这一项不适用")
 
-    current = _current_preference(guid)
+    current = _global_preference()
     name = _PREFERENCE_NAMES.get(current, current)
     label = f"{name} ({current})" if current else "跟随系统"
     return GPUState(
@@ -215,20 +329,12 @@ def set_gpu_preference(preference: str) -> GPUState:
         # the same on every machine.
         return GPUState(message="没有这个选项")
 
-    guid = _engine_guid()
-    if not guid:
+    adapters = nvidia_adapters()
+    if not adapters:
         return GPUState(message="没有找到 NVIDIA 显卡，这一项不适用")
 
     try:
-        import winreg
-
-        with winreg.CreateKeyEx(
-            winreg.HKEY_CURRENT_USER,
-            _PREFERRED_GRAPHICS_KEY,
-            0,
-            winreg.KEY_SET_VALUE,
-        ) as key:
-            winreg.SetValueEx(key, guid, 0, winreg.REG_SZ, value)
+        _write_global_preference(value)
     except (OSError, ImportError) as exc:
         log.warning("the graphics preference could not be written: %s", exc)
         return GPUState(supported=True, message=f"写不进去：{exc}")
@@ -246,17 +352,88 @@ def set_gpu_preference(preference: str) -> GPUState:
 def gpu_load() -> int:
     """How busy the graphics card is, as a percentage.
 
-    The number comes from the performance counters of the driver.  When
-    they cannot be read - a card that is not NVIDIA, or a driver that
-    does not publish them - the answer is -1, which means "not known".
+    The number comes from the driver.  Two sources are tried, in this
+    order:
 
-    The counters are read through the performance data helper, which is
-    part of Windows.  The library is looked up by name so that the
-    module stays importable off Windows.
+    *   ``nvidia-smi``, which is part of the NVIDIA driver and answers
+        in a few milliseconds.
+    *   the performance counters of the driver, through the
+        performance data helper.
+
+    The counters are the second choice because the call that adds a
+    counter crashes the process on some machines - not because of the
+    counter that is asked for, but because the call itself goes wrong
+    there.  A crash of the window is a lot worse than a load that is
+    not known.
+
+    When neither source answers, the result is -1, which means "not
+    known".  The interface says that; it does not make a number up.
     """
     if sys.platform != "win32":
         return -1
 
+    value = _load_from_nvidia_smi()
+    if value >= 0:
+        return value
+
+    value = _load_from_counters()
+    if value >= 0:
+        return value
+
+    return -1
+
+
+def _load_from_nvidia_smi() -> int:
+    """The load from ``nvidia-smi``, or -1 when it does not answer.
+
+    The tool is part of the driver.  It prints the numbers it knows
+    as a list of values separated by commas, and the first one is the
+    load of the graphics engine.
+    """
+    try:
+        import subprocess
+    except ImportError:
+        return -1
+
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=utilization.gpu",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            timeout=5,
+            text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception as exc:  # noqa: BLE001 - the tool may not be there
+        log.debug("nvidia-smi could not be run: %s", exc)
+        return -1
+
+    if result.returncode != 0:
+        return -1
+
+    for line in (result.stdout or "").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            value = int(float(line.split(",")[0]))
+        except (ValueError, IndexError):
+            continue
+        if 0 <= value <= 100:
+            return value
+    return -1
+
+
+def _load_from_counters() -> int:
+    """The load from the performance counters of the driver.
+
+    This is the second choice.  The call that adds the counter can
+    crash the process on some machines, so it is done in a way that
+    does not take the program down with it when it fails.
+    """
     try:
         import ctypes
         from ctypes import wintypes
@@ -268,8 +445,43 @@ def gpu_load() -> int:
     except (AttributeError, OSError):
         return -1
 
-    query = wintypes.HQUERY()
-    counter = wintypes.HCOUNTER()
+    # The performance data helper uses its own handle types.  They are
+    # not in ``ctypes.wintypes`` - not on any platform - so they are
+    # declared here.  They are pointers.
+    #
+    # The argument types have to be declared as well: without them
+    # ctypes guesses, and a string argument that is passed as a
+    # pointer to a pointer ends up as a wild address.
+    query = ctypes.c_void_p()
+    counter = ctypes.c_void_p()
+    try:
+        pdh.PdhOpenQueryW.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        pdh.PdhOpenQueryW.restype = ctypes.c_long
+        pdh.PdhAddEnglishCounterW.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_wchar_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        pdh.PdhAddEnglishCounterW.restype = ctypes.c_long
+        pdh.PdhCollectQueryData.argtypes = [ctypes.c_void_p]
+        pdh.PdhCollectQueryData.restype = ctypes.c_long
+        pdh.PdhCloseQuery.argtypes = [ctypes.c_void_p]
+        pdh.PdhCloseQuery.restype = ctypes.c_long
+        pdh.PdhGetFormattedCounterArrayW.argtypes = [
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            ctypes.c_void_p,
+        ]
+        pdh.PdhGetFormattedCounterArrayW.restype = ctypes.c_long
+    except AttributeError:
+        # An older Windows without the English counter names.
+        return -1
+
     try:
         if pdh.PdhOpenQueryW(None, None, ctypes.byref(query)) != 0:
             return -1
@@ -300,14 +512,14 @@ def _read_counters(pdh, counter) -> int:
         import ctypes
         from ctypes import wintypes
 
-        buffer = (ctypes.c_double * 8)()
+        buffer = (ctypes.c_double * 32)()
         size = wintypes.DWORD(len(buffer))
         if (
             pdh.PdhGetFormattedCounterArrayW(
                 counter,
                 0x400,  # PDH_FMT_DOUBLE
                 ctypes.byref(size),
-                buffer,
+                ctypes.cast(buffer, ctypes.c_void_p),
             )
             != 0
         ):
@@ -316,7 +528,9 @@ def _read_counters(pdh, counter) -> int:
         return -1
 
     best = -1.0
-    for value in buffer:
+    count = min(size.value, len(buffer))
+    for index in range(count):
+        value = buffer[index]
         if value > best:
             best = value
     if best < 0:

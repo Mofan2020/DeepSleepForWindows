@@ -7,7 +7,7 @@
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Release](https://img.shields.io/badge/release/Mofan2020/DeepSleepForWindows)
 
-- **Version**: 0.3.0
+- **Version**: 0.3.1
 - **Language**: Python 3.11+, pywebview
 - **License**: MIT
 
@@ -46,6 +46,9 @@ DeepSleep For Windows does that, and it lets you write your own rules on top.
   or by age, or clear it.
 - **Stays out of the way** — a tray icon in the notification area, and only one
   copy of the program running at a time.
+- **Updates itself** — it checks the GitHub releases, and replaces its own file
+  when there is a newer version. The background tasks are pointed at the new
+  file afterwards, so moving the program never leaves them behind.
 
 ## How it works
 
@@ -114,6 +117,7 @@ DeepSleepForWindows plans           list the power plans
 DeepSleepForWindows switch "Balanced"   switch the power plan now
 DeepSleepForWindows lock            lock the screen now
 DeepSleepForWindows sleep [--hibernate]  put the machine to sleep now
+DeepSleepForWindows update           check for a newer version and install it
 DeepSleepForWindows doctor              check that the setup is right
 DeepSleepForWindows selftest            check that the bundle is complete
 DeepSleepForWindows install             register the scheduled tasks

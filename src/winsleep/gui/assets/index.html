@@ -89,7 +89,7 @@
     <div class="panel glass">
       <div class="panel-head">
         <div class="grow">
-          <h2>自定义电源计划</h2>
+          <h2>电源计划</h2>
           <p class="muted">改一个计划里的具体内容，比如多久关屏幕、多久睡觉。</p>
         </div>
         <div class="row-actions">
@@ -113,8 +113,8 @@
     <div class="panel glass">
       <div class="panel-head">
         <div class="grow">
-          <h2>DSForWin 自带电源计划</h2>
-          <p class="muted">这两个是程序自己造的，比系统自带的更极端。</p>
+          <h2>程序自带的电源计划</h2>
+          <p class="muted">两个现成的计划，比系统自带的更极端。</p>
         </div>
       </div>
       <div id="ownPlanList" class="cards"></div>
@@ -233,8 +233,10 @@
       <h2>维护</h2>
       <div class="toolbar">
         <button class="btn ghost" id="refreshBtn">刷新</button>
+        <button class="btn ghost" id="updateBtn">检查更新</button>
         <button class="btn ghost" id="uninstallBtn">卸载后台服务</button>
       </div>
+      <p class="hint" id="updateHint"></p>
     </div>
   </section>
 
@@ -245,8 +247,7 @@
         <div class="grow">
           <h2>日志</h2>
           <p class="muted">进这个页面就开始实时显示，不用点读取。</p>
-        </div>
-        <div class="row-actions">
+        </div>        <div class="row-actions">
           <label class="switch">
             <input type="checkbox" id="logFollowToggle" checked>
             <span>自动滚动</span>

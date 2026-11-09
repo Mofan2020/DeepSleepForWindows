@@ -20,6 +20,7 @@ import argparse
 import json
 import logging
 import logging.handlers
+import os
 import sys
 
 from .core import config as config_mod
@@ -149,6 +150,7 @@ def _setup_logging(verbose: bool) -> None:
         root.addHandler(stream)
 
 
+
 def _open_window() -> int:
     """Open the window, and tell the user if that does not work.
 
@@ -172,12 +174,11 @@ def _cmd_tray(_args: argparse.Namespace) -> int:
     from .core import tray, winapi, winpower
 
     def _show() -> None:
-        # The window is opened by the same program in a second copy, so
-        # that only one window exists at a time.
-        try:
-            _elevate_and_exit([sys.executable, "gui"])
-        except SystemExit:
-            pass
+        # The window is opened by a second copy of the program, so that
+        # only one window exists at a time.  It is started as its own
+        # process: this one is the tray and has to stay alive, so it
+        # cannot be the one that opens the window.
+        _open_gui_copy()
 
     def _lock() -> None:
         winapi.lock_workstation()
@@ -192,6 +193,29 @@ def _cmd_tray(_args: argparse.Namespace) -> int:
         winpower.set_active_plan(guid)
 
     return tray.run_tray(_show, _lock, _quit, _plans, _switch)
+
+
+def _open_gui_copy() -> None:
+    """Start the window as a separate process.
+
+    The tray has to keep running, so the window cannot be opened by
+    this process - a program that opens a window and then ends would
+    take the tray with it.
+    """
+    import subprocess
+
+    try:
+        if getattr(sys, "frozen", False):
+            command = [sys.executable, "gui"]
+        else:
+            command = [sys.executable, "-m", "winsleep.cli", "gui"]
+        flags = 0
+        if sys.platform == "win32":
+            flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(command, creationflags=flags, close_fds=True)
+    except Exception as exc:  # noqa: BLE001 - the tray has to survive
+        log.warning("the window could not be opened: %s", exc)
+
 
 
 def _cmd_gui(_args: argparse.Namespace) -> int:
@@ -337,6 +361,119 @@ def _cmd_selftest(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_update(_args: argparse.Namespace) -> int:
+    """Check for a newer version and offer to install it.
+
+    The check needs the network, so it is not done at every start.
+    When a newer version is there, it is downloaded, checked, and the
+    program replaces itself with it.
+    """
+    from .core import update
+
+    print(f"current version: {update.current_version()}")
+    print(f"releases:        {update.release_url()}")
+
+    if not update.is_frozen():
+        print("this is a run from the source, so it cannot replace itself")
+        return 1
+
+    ok, detail = _download_and_install_update()
+    print(detail)
+    return 0 if ok else 1
+
+
+def _download_and_install_update() -> tuple[bool, str]:
+    """Fetch the newest release and put it in place.
+
+    The whole chain is here rather than in the update module, because
+    it is the one place that talks to the network.
+    """
+    import json
+    import urllib.request
+    import zipfile
+
+    from .core import update
+
+    api = (
+        f"https://api.github.com/repos/{update.RELEASE_OWNER}/"
+        f"{update.RELEASE_REPO}/releases?per_page=30"
+    )
+    request = urllib.request.Request(
+        api, headers={"User-Agent": "DeepSleepForWindows", "Accept": "application/vnd.github+json"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as reply:
+            releases = json.loads(reply.read().decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001 - the reason has to show
+        return False, f"连不上 GitHub：{exc}"
+
+    candidates = [
+        item
+        for item in releases
+        if not item.get("draft") and update.parse_version(item.get("tag_name", ""))
+    ]
+    if not candidates:
+        return False, "没有找到可用的发布版本"
+
+    newest = max(candidates, key=lambda item: update.parse_version(item["tag_name"]))
+    tag = newest["tag_name"]
+    if not update.is_newer(tag):
+        return True, f"已经是最新版本（{tag}）"
+
+    asset = None
+    for item in newest.get("assets", []):
+        if item.get("name") == update.ASSET_NAME:
+            asset = item
+            break
+    if asset is None:
+        return False, f"{tag} 里没有 {update.ASSET_NAME}"
+
+    work = update.work_directory()
+    work.mkdir(parents=True, exist_ok=True)
+    archive = work / update.ASSET_NAME
+    try:
+        request = urllib.request.Request(
+            asset["browser_download_url"], headers={"User-Agent": "DeepSleepForWindows"}
+        )
+        with urllib.request.urlopen(request, timeout=300) as reply:
+            with open(archive, "wb") as out:
+                while True:
+                    chunk = reply.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+    except Exception as exc:  # noqa: BLE001 - the reason has to show
+        return False, f"下载失败：{exc}"
+
+    try:
+        source = update.extract_executable(archive, work / "new")
+    except (OSError, ValueError, zipfile.BadZipFile) as exc:
+        return False, f"压缩包有问题：{exc}"
+
+    target = update.executable_path()
+    from .core import install
+
+    # Each task runs the program with its own sub command, so the
+    # command line has to be built for each one of them.
+    tasks = [
+        (install.DAEMON_TASK, install.task_command("daemon")),
+        (install.AGENT_TASK, install.task_command("agent")),
+        (install.TRAY_TASK, install.task_command("tray")),
+    ]
+    script = update.write_updater_script(
+        target=target,
+        source=source,
+        work_directory=work,
+        pid=os.getpid(),
+        version=tag,
+        tasks=tasks,
+    )
+    if not update.start_updater(script):
+        return False, "更新程序没能启动"
+
+    return True, f"正在更新到 {tag}，程序会自己重启"
+
+
 def _cmd_doctor(_args: argparse.Namespace) -> int:
     """Check that the program is set up the way it should be.
 
@@ -407,6 +544,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"{DISPLAY_NAME} {__version__}")
     parser.add_argument("-v", "--verbose", action="store_true", help="log to the console")
+    # The marker is added to the command line by the elevation code.
+    # It has to be accepted here, or the elevated copy refuses to
+    # start with "unrecognized arguments" and dies before it does
+    # anything at all - which looks exactly like a program that does
+    # nothing and writes no log.
+    from .core.elevate import ELEVATION_MARKER
+
+    parser.add_argument(
+        ELEVATION_MARKER,
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("gui", help="open the window").set_defaults(func=_cmd_gui)
@@ -435,6 +584,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "doctor", help="check that everything is set up the way it should be"
     ).set_defaults(func=_cmd_doctor)
+
+    sub.add_parser(
+        "update", help="check for a newer version and install it"
+    ).set_defaults(func=_cmd_update)
 
     sleep = sub.add_parser("sleep", help="put the machine to sleep now")
     sleep.add_argument(

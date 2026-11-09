@@ -7,7 +7,7 @@
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Release](https://img.shields.io/badge/release/Mofan2020/DeepSleepForWindows)
 
-- **版本**：0.3.0
+- **版本**：0.3.1
 - **语言**：Python 3.11+，pywebview
 - **协议**：MIT
 
@@ -30,6 +30,7 @@ DeepSleep For Windows 替你做这件事，还允许你在这基础上写自己�
 - **要窗口的话也有** —— 一个 pywebview 小界面，看状态、改设置、管规则。
 - **实时看日志** —— 日志边写边看，按行数或按天数裁剪，也能直接清空。
 - **不碍事** —— 通知区域常驻一个小图标，程序同时只跑一个。
+- **会自己更新** —— 从 GitHub release 下载新版本，校验后替换自己，任务跟着指向新文件，然后重新启动。程序换了位置也不会被落在后面。
 
 ## 工作原理
 
@@ -82,6 +83,7 @@ DeepSleepForWindows plans                列出所有电源计划
 DeepSleepForWindows switch "平衡"        立刻切换电源计划
 DeepSleepForWindows lock                 立刻锁屏
 DeepSleepForWindows sleep [--hibernate]  立刻让机器睡觉
+DeepSleepForWindows update          检查新版本并安装
 DeepSleepForWindows doctor               检查装得对不对
 DeepSleepForWindows selftest             检查打包文件完整
 DeepSleepForWindows install              注册计划任务

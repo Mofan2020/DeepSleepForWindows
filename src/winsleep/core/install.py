@@ -37,6 +37,12 @@ AGENT_TASK = "DeepSleepForWindows-Agent"
 SCHEDULE_TASK = "DeepSleepForWindows-Schedule"
 TRAY_TASK = "DeepSleepForWindows-Tray"
 
+#: The error code Windows gives when a task cannot find the file it
+#: runs.  It is the usual failure of a task that points at a place
+#: where the program is not any more.
+_FILE_NOT_FOUND = 0x80070002
+
+
 
 def _decode(raw: bytes) -> str:
     """Turn the raw output of a command into text.
@@ -96,10 +102,27 @@ def _module_args(command: str) -> str:
     is the executable followed by the sub command.  Running from source
     needs the command line entry point, because the modules are not
     scripts.
+
+    The path of the executable is taken from the running program, not
+    remembered in the settings.  The user is free to move the file,
+    and the task has to follow it - a task that points at a place
+    where the file no longer is fails with "the file was not found"
+    every single time.
     """
     if getattr(sys, "frozen", False):
         return f'"{sys.executable}" {command}'
     return f'"{sys.executable}" -m winsleep.cli {command}'
+
+
+def task_command(command: str) -> str:
+    """The command line a task runs.
+
+    This is the same as what the tasks are created with, and it is
+    used again when the program replaces itself - the tasks have to
+    end up pointing at the new file, with the same sub command.
+    """
+    return _module_args(command)
+
 
 
 def install_daemon_task() -> tuple[bool, str]:
@@ -259,8 +282,58 @@ def task_exists(name: str) -> bool:
     return result.returncode == 0
 
 
+def _last_task_result(name: str) -> tuple[int | None, str]:
+    """The result of the last run of a task, and its text.
+
+    The number is what Windows reports: ``0`` means it worked.  The
+    usual failure of a task that points at a file that is not there
+    any more is ``0x80070002``.
+    """
+    result = _run(["schtasks", "/Query", "/TN", name, "/FO", "LIST", "/V"])
+    if result.returncode != 0:
+        return None, ""
+    text = (result.stdout or "") + (result.stderr or "")
+    code: int | None = None
+    for line in text.splitlines():
+        if "Last Task Result" in line or "上次任务结果" in line:
+            _, _, value = line.partition(":")
+            value = value.strip()
+            try:
+                code = int(value, 0)
+            except ValueError:
+                code = None
+    return code, ""
+
+
+def task_points_at(name: str, executable: str) -> bool:
+    """True when the task runs the given file.
+
+    A task holds the path of the program it starts.  When the program
+    is moved, the task still points at the old place and every run
+    fails with "the file was not found".  This is how that is noticed
+    before the user is told the service started.
+    """
+    result = _run(["schtasks", "/Query", "/TN", name, "/FO", "LIST", "/V"])
+    if result.returncode != 0:
+        return False
+    text = (result.stdout or "") + (result.stderr or "")
+    wanted = str(executable).lower()
+    for line in text.splitlines():
+        if "Task To Run" not in line and "要运行的任务" not in line:
+            continue
+        _, _, value = line.partition(":")
+        if wanted in value.lower():
+            return True
+    return False
+
+
+
 def install_all() -> tuple[bool, str]:
     """Register the tasks.
+
+    The tasks are always created from the running program, so they
+    point at the place the program is right now.  A task that was
+    registered when the program stood somewhere else is replaced.
 
     The tray task is the one that may fail: an interactive task needs
     the password of the user when it is created from a command line,
@@ -275,13 +348,34 @@ def install_all() -> tuple[bool, str]:
     if not ok:
         return False, detail
 
-    messages = ["the tasks were registered"]
+    messages = ["后台服务已安装"]
     tray_ok, tray_detail = install_tray_task()
     if tray_ok:
-        messages.append(f"{TRAY_TASK} was registered")
+        messages.append("托盘图标已加入开机启动")
     else:
         messages.append(f"开机自启没有装上：{tray_detail}")
-    return True, ", ".join(messages)
+    return True, "，".join(messages)
+
+
+def tasks_are_current() -> tuple[bool, str]:
+    """True when the tasks point at the program that is running now.
+
+    When the program was moved, the tasks still point at the old
+    place and every start fails with "the file was not found".  This
+    is what notices that, so the program can offer to fix it instead
+    of saying the service started.
+    """
+    if not getattr(sys, "frozen", False):
+        return True, ""
+    executable = str(sys.executable).lower()
+    for name in (DAEMON_TASK, AGENT_TASK, TRAY_TASK):
+        if not task_exists(name):
+            continue
+        if task_points_at(name, executable):
+            continue
+        return False, name
+    return True, ""
+
 
 
 def uninstall_all() -> tuple[bool, str]:
@@ -414,14 +508,51 @@ def tray_installed() -> bool:
 
 
 def start_daemon() -> tuple[bool, str]:
-    """Start the daemon task right now."""
+    """Start the daemon task right now.
+
+    ``schtasks /Run`` only says that the request was accepted.  The
+    task then fails on its own when the file it points at is not
+    there, and the program has to say so instead of telling the user
+    it started.  The result of the task is read after it, and the
+    daemon is asked whether it answers.
+    """
     if not task_exists(DAEMON_TASK):
         return False, "the background service is not installed yet"
     result = _run(["schtasks", "/Run", "/TN", DAEMON_TASK])
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
         return False, detail or "the daemon did not start"
-    return True, "the background service was started"
+    return _confirm_daemon_started("the background service was started")
+
+
+def _confirm_daemon_started(success_message: str) -> tuple[bool, str]:
+    """Check that the daemon really came up, and say what happened.
+
+    The task can be accepted and still fail - the usual reason is that
+    the file it points at is gone, because the program was moved.  The
+    result of the last run tells that apart: ``0x80070002`` means the
+    file was not found.
+    """
+    import time
+
+    # The daemon needs a moment to unpack itself and open its port.
+    for _ in range(20):
+        if daemon_running():
+            return True, success_message
+        time.sleep(0.25)
+
+    code, detail = _last_task_result(DAEMON_TASK)
+    if code is not None and code != 0:
+        if code == _FILE_NOT_FOUND:
+            return False, (
+                "后台服务启动失败：找不到程序文件。"
+                "多半是程序被移动过或者被删掉了，"
+                "重新点一次「安装并启动」就会按现在的位置重建任务"
+            )
+        return False, f"后台服务启动失败（任务返回码 {code:#x}）{detail}"
+    return False, "后台服务没有启动起来，详见日志"
+
+
 
 
 def stop_daemon() -> tuple[bool, str]:
@@ -455,11 +586,17 @@ def stop_daemon() -> tuple[bool, str]:
 
 def service_status() -> dict[str, object]:
     """What the interface needs to draw the state of the service."""
+    current, stale = tasks_are_current()
     return {
         "installed": service_installed(),
         "running": daemon_running(),
         "agent_running": agent_running(),
         "tray_installed": tray_installed(),
+        # True when the tasks still point at a place where the program
+        # is not any more.  The interface says so instead of leaving
+        # the user wondering why the service does not start.
+        "stale": not current,
+        "stale_task": stale,
     }
 
 

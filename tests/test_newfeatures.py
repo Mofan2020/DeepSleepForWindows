@@ -12,6 +12,8 @@ import os
 import time
 from pathlib import Path
 
+import pytest
+
 from winsleep.core import gpu, ownplans, single
 
 # ------------------------------------------------------------ single instance
@@ -72,8 +74,8 @@ def test_there_are_two_own_plans() -> None:
     plans = ownplans.own_plan_settings()
     assert len(plans) == 2
     names = [plan["name"] for plan in plans]
-    assert "DSForWin 最节能" in names
-    assert "DSForWin 最高性能" in names
+    assert "DeepSleep 最节能" in names
+    assert "DeepSleep 最高性能" in names
 
 
 def test_the_own_plans_are_told_apart() -> None:
@@ -99,8 +101,8 @@ def test_an_unknown_own_plan_is_refused() -> None:
 
 
 def test_the_own_plan_names_are_recognised() -> None:
-    assert ownplans.is_own_plan("DSForWin 最节能") is True
-    assert ownplans.is_own_plan("DSForWin 最高性能") is True
+    assert ownplans.is_own_plan("DeepSleep 最节能") is True
+    assert ownplans.is_own_plan("DeepSleep 最高性能") is True
     assert ownplans.is_own_plan("平衡") is False
 
 
@@ -108,12 +110,26 @@ def test_the_own_plan_names_are_recognised() -> None:
 
 
 def test_off_windows_the_graphics_card_is_not_supported() -> None:
+    """On a machine that is not Windows there is nothing to read.
+
+    The check has to be about the platform and not about the machine
+    the tests happen to run on - the same tests run on the Windows
+    build machine, where there *is* a card.
+    """
+    import sys
+
+    if sys.platform == "win32":
+        pytest.skip("this machine has a graphics card")
     state = gpu.gpu_state()
     assert state.supported is False
     assert state.message
 
 
 def test_off_windows_the_graphics_load_is_not_known() -> None:
+    import sys
+
+    if sys.platform == "win32":
+        pytest.skip("the counters can be read on Windows")
     assert gpu.gpu_load() == -1
 
 
@@ -129,3 +145,4 @@ def test_the_graphics_state_can_be_given_to_the_interface() -> None:
     assert "applied" in data
     assert "utilisation" in data
     assert "message" in data
+

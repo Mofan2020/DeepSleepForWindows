@@ -292,6 +292,7 @@ class Bridge:
             return {"ok": False, "message": f"启动失败：{exc}"}
         return {"ok": ok, "message": detail}
 
+
     def start_service(self) -> dict[str, Any]:
         """Start the background service."""
         if not _is_admin():
@@ -513,6 +514,32 @@ class Bridge:
         from ..core import ownplans
 
         return {"ok": True, "plans": ownplans.own_plan_settings()}
+
+    def check_update(self) -> dict[str, Any]:
+        """Look for a newer version and put it in place when there is one.
+
+        The work is done by a script in the temporary directory, because
+        the program cannot replace itself while it is running.  The
+        script waits for this program to close, replaces the file,
+        points the tasks at the new file and starts the program again.
+        """
+        from ..cli import _download_and_install_update
+
+        try:
+            ok, message = _download_and_install_update()
+        except Exception as exc:  # noqa: BLE001 - the interface has to know
+            log.warning("the update check failed: %s", exc)
+            return {"ok": False, "message": f"检查失败：{exc}"}
+        return {"ok": ok, "message": message}
+
+    def update_result(self) -> dict[str, Any]:
+        """What the last update did, so the interface can tell the user."""
+        from ..core import update
+
+        result = update.read_result()
+        if result:
+            update.clear_result()
+        return result
 
     def create_own_plan(self, kind: str) -> dict[str, Any]:
         """Make one of the program's own power plans."""

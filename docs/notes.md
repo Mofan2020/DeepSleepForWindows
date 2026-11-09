@@ -330,3 +330,95 @@ CI 里的做法：证书以 base64 的 PKCS#12 存在 repository secrets 里，�
 - **显卡强制休眠**：Windows 没有这个接口，见上面第 5 条。
 - **托盘图标的自定义绘制**：现在用程序自己的 `icon.png`，找不到时才画一个蓝色圆点兜底。
 - **关窗口缩到托盘**：目前关窗口就是关程序，托盘是独立的 `tray` 模式。两者的整合留待后续。
+
+## v0.3.1 修的问题（2026-11-09，在真机上查出来的）
+
+v0.3.0 发出去之后，用户报告了四件事：托盘没有图标、后台服务说启动成功但没在运行、NVIDIA 显卡检测不到、日志一个字都没有。这一节记的是在 192.168.1.32 上查出来的原因。
+
+### 日志为空 —— 提权标记让程序自己死了
+
+`core/elevate.py` 的 `with_marker()` 会往命令行里塞一个 `--winsleep-elevated`。**这个标记没有注册进 argparse**。提权后的那个副本一启动就报：
+
+```
+DeepSleepForWindows: error: unrecognized arguments: --winsleep-elevated
+```
+
+然后立刻退出。于是：双击 → 弹 UAC → 提权的副本秒退 → 原进程也退 → **什么都没跑起来，日志一个字没写**。用户看到的「日志是空的」就是这个。
+
+修法：`build_parser()` 里把 `ELEVATION_MARKER` 注册成一个 `store_true` 参数。
+
+**这一条还顺带解释了「说启动成功但没在运行」**：程序根本没起来，所以后台当然没在运行。
+
+### 计划任务指向一个不存在的文件
+
+任务里写死了 exe 的路径：
+
+```
+Task To Run: "C:\Users\philia093\Desktop\DeepSleep For Windows.exe" daemon
+LastTaskResult: 2147942402      ← 0x80070002 = 找不到文件
+```
+
+用户把程序换了位置，任务还指着旧地方。`schtasks /Run` 只会说「任务被请求启动」，Windows 随后因为找不到文件直接失败 —— 而旧代码把「请求被接受」当成了「启动成功」，于是界面上写着「the background service was started」，实际上什么都没发生。
+
+修法，三处：
+
+1. `install.task_command()` —— 任务的命令行永远从**正在运行的这个程序**取路径，不记在设置里。用户把文件挪了，重装一次任务就跟上。
+2. `install.tasks_are_current()` —— 任务指向的地方跟当前程序对不上时，界面直接说「任务还指着程序原来的位置」，并给一个「重新安装任务」按钮。
+3. `install.start_daemon()` 之后会**等**守护进程真的应答（最多 5 秒）；没起来就去读任务的返回码，`0x80070002` 单独给一句「找不到程序文件，多半是程序被移动过了」。
+
+### NVIDIA 显卡检测不到 —— 读错了注册表位置
+
+旧代码去读 `<adapter>\<entry>\Settings\GUID`。这台机器上那个 `Settings` 子键**不存在**（WinError 2），所以永远返回空，界面就一直说「这一项不适用」—— 而机器里明明有 RTX 3060。
+
+实测这台机的注册表：`Control\Video\{B55DB269-...}\0000` 下 `ProviderName = NVIDIA`、`DriverDesc = NVIDIA GeForce RTX 3060`。按 `ProviderName` 找就对了。
+
+**偏好值写在哪**：Windows 有两个地方。机器级是
+
+```
+HKCU\Software\Microsoft\DirectX\UserGpuPreferences\DirectXUserGlobalSettings
+```
+
+里面是分号隔开的一串设置，例如 `GpuPreference=2;SwapEffectUpgradeEnable=0;`。程序写这一项，**别的设置原样保留**（不是我们的东西，不该动）。按适配器 LUID 的那一个是给单个适配器用的。
+
+**还有一个 bug**：判断设置名时用了 `part.lower().startswith(f"{_GPU_PREFERENCE_SETTING}=")`，左边小写了右边没小写，永远不匹配。所以偏好既读不出来、也替换不掉（只会追加一条重复的）。两个常量现在都用小写比较。
+
+### 显卡负载读不出来 —— 两个原因
+
+1. `ctypes.wintypes` 里**根本没有** `HQUERY` 和 `HCOUNTER`（在任何平台都没有）。`wintypes.HQUERY()` 直接 AttributeError。
+2. 修好类型之后，`PdhAddEnglishCounterW` 在这台机器上**直接崩**（access violation），而且跟计数器路径无关 —— 连 `\Processor(_Total)\% Processor Time` 都崩。
+
+所以改用 `nvidia-smi`（驱动自带，实测 5 次调用 0.24 秒，返回 `40, 16, NVIDIA GeForce RTX 3060`）。性能计数器留作第二条路。
+
+**教训**：Windows API 的 ctypes 绑定，参数类型必须显式声明。不声明的话 ctypes 会猜，猜错就是野指针。同一个函数在别的机器上能跑，不代表这台能跑。
+
+### 托盘 —— 任务根本没装上
+
+`install_all()` 里托盘任务是可失败的那个（交互式任务要密码，有些机器拒绝）。这台机器上查任务，只有 Daemon 和 Agent，**没有 Tray**。所以托盘图标从来没出现过。
+
+托盘代码本身还有两个问题：
+
+- **「打开主界面」会把托盘自己杀掉**：它调的是 `_elevate_and_exit()`，那个函数最后是 `sys.exit(0)` —— 托盘进程直接没了。改成用 `subprocess.Popen` 起一个独立的窗口进程。
+- **「退出」不退出**：菜单项只调了 `on_quit()`（那只是写一行日志），图标没停，程序留在那里。
+
+### 界面上的缩写
+
+电源计划的名字里写着 `DSForWin`，这是仓库名的缩写，界面上不该出现。改成 `DeepSleep 最节能` / `DeepSleep 最高性能`，界面上的标题改成「程序自带的电源计划」。
+
+### 自动更新
+
+v0.3.0 完全没有更新流程，而程序是单文件、还被计划任务指着 —— 用户换了位置就永远起不来。按 macOS 原版 DeepSleep 的做法补上：
+
+- 检查 GitHub release（列出来自己挑，不用 `/releases/latest` —— 它不返回预发布）
+- 下载 → 解压 → 校验压缩包里只有一个 exe 且路径不越界
+- **更新器脚本写在临时目录**（要替换的文件正是会被替换掉的那个），等程序退出 → 停任务 → 旧文件**改名**而不是删除 → 放入新文件 → 任务指向新文件 → 重新启动
+- 新文件放不进去就把旧的放回去 —— 宁可停在旧版本，也不能留下一个装不上的程序
+- 结果写进文件，程序下次启动时读它 —— 用户重启过电脑也知道这次更新成没成
+
+实测在真机上跑了一遍：目标文件被替换、旧文件清掉、结果文件写出 `{"status":"success","version":"v9.9.9",...}`。
+
+**踩到的坑**：
+
+- `echo {"status":"success"}` 里的花括号在 cmd 里会被当成语法，写出来是 `{{"status":"success"}}`。改成用 `call :label` 子程序，把参数传进去。
+- `> "%RESULT%"` 里的 `>` 前面的 `1` 会被 cmd 当成重定向 stdin（`1>` 是重定向标准输入！），文件写不出来。去掉那个 `1`。
+- 结果文件所在的目录可能已经没了（程序启动时才建，脚本是在程序退出后才跑的）。脚本里先 `mkdir`。
+- 脚本自己的工作目录最后会被删掉，而 Windows 不允许删掉当前所在的目录。脚本开头 `cd /d "%TEMP%"`。

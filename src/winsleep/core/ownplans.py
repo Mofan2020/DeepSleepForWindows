@@ -3,13 +3,13 @@
 Windows ships with a few plans, and they are not extreme enough for
 what this program is for.  Two of its own are made here:
 
-DSForWin 最节能
+最节能
     The machine is put into the lowest state it can live in.  The
     processor drops as far as it goes, the screen goes dark quickly,
     the disks stop spinning, and the parts that are not needed are
     switched off.
 
-DSForWin 最高性能
+最高性能
     The machine is kept as awake as it can be.  The processor never
     drops below its top speed, the screen stays on, the disks keep
     spinning, and the links between the parts stay at their fastest.
@@ -40,7 +40,7 @@ log = logging.getLogger("winsleep.ownplans")
 #: them, and the value holds the settings they are made of.
 OWN_PLANS: dict[str, dict[str, Any]] = {
     "saver": {
-        "name": "DSForWin 最节能",
+        "name": "DeepSleep 最节能",
         "description": "把机器压到最省电的状态。",
         "settings": [
             ("7516b95f-f776-4464-8c53-06167f40cc99", "3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e", 120),
@@ -56,7 +56,7 @@ OWN_PLANS: dict[str, dict[str, Any]] = {
         ],
     },
     "performance": {
-        "name": "DSForWin 最高性能",
+        "name": "DeepSleep 最高性能",
         "description": "把机器的性能拉满。",
         "settings": [
             ("7516b95f-f776-4464-8c53-06167f40cc99", "3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e", 0),

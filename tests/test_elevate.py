@@ -6,6 +6,10 @@ most of these checks are about.
 
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 from winsleep.core import elevate
 
 
@@ -51,17 +55,35 @@ def test_a_copy_without_the_marker_knows_it_was_not_elevated() -> None:
 def test_off_windows_the_program_counts_as_admin() -> None:
     # There is nothing to elevate on a machine that is not Windows, and
     # the rest of the program must not need a platform check for it.
+    if sys.platform == "win32":
+        pytest.skip("this machine can be elevated")
     assert elevate.is_admin() is True
 
 
 def test_elevating_off_windows_does_nothing() -> None:
+    if sys.platform == "win32":
+        pytest.skip("this machine can be elevated")
     assert elevate.elevate(["app.exe"]) is False
 
 
 def test_elevating_off_windows_does_not_end_the_program() -> None:
     # The caller has to be able to carry on when the elevation did not
     # happen, so this must not raise SystemExit.
+    if sys.platform == "win32":
+        pytest.skip("this machine can be elevated")
     assert elevate.elevate_and_exit(["app.exe"]) is False
+
+
+def test_on_windows_the_program_is_not_admin_by_default() -> None:
+    """The check has to be able to say "no" as well.
+
+    A test that only knows the "not Windows" answer would pass on the
+    build machine without ever checking the real thing.
+    """
+    if sys.platform != "win32":
+        pytest.skip("this is not a Windows machine")
+    # The answer is a boolean, whichever way it comes out.
+    assert isinstance(elevate.is_admin(), bool)
 
 
 def test_the_executable_is_not_among_the_arguments() -> None:

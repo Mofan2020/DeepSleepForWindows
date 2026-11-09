@@ -534,6 +534,19 @@ function renderService(service) {
     return;
   }
 
+  /* The tasks hold the path of the program.  When the program was
+   * moved, the task still points at the old place and every start
+   * fails.  Say that instead of leaving the user pressing a button
+   * that cannot work. */
+  if (service.stale) {
+    text.textContent = '后台服务的任务还指着程序原来的位置。';
+    hint.textContent = '程序被移动过了，把任务重新装一次就好。';
+    actions.appendChild(
+      serviceButton('重新安装任务', () => api().install_service(), true)
+    );
+    return;
+  }
+
   if (!service.running) {
     text.textContent = '后台服务已安装，但没有在运行。';
     hint.textContent = '';
@@ -766,6 +779,23 @@ function wire() {
     $('serviceHint').textContent = result.message || '';
     $('serviceHint').className = result.ok ? 'hint ok' : 'hint bad';
     await refresh();
+  });
+
+  $('updateBtn').addEventListener('click', async () => {
+    const button = $('updateBtn');
+    const hint = $('updateHint');
+    button.disabled = true;
+    hint.textContent = '正在检查…';
+    hint.className = 'hint';
+    try {
+      const result = await api().check_update();
+      hint.textContent = result.message || '';
+      hint.className = result.ok ? 'hint ok' : 'hint bad';
+    } catch (err) {
+      hint.textContent = '检查失败：' + (err && err.message ? err.message : err);
+      hint.className = 'hint bad';
+    }
+    button.disabled = false;
   });
 
   $('openLogBtn').addEventListener('click', async () => {

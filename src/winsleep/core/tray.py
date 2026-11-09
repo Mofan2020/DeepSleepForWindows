@@ -39,6 +39,8 @@ def icon_path() -> Path | None:
 
     The assets are unpacked into a temporary directory in a frozen
     build, so the place to look is the same one the interface uses.
+    The icon is put into the assets directory of the package by the
+    build, so that is where it is found.
     """
     from ..gui.app import _assets_dir
 
@@ -47,11 +49,13 @@ def icon_path() -> Path | None:
     except Exception:  # noqa: BLE001 - the path is known, but be safe
         return None
 
-    for base in (assets, assets.parent, assets.parent.parent):
-        for name in (TRAY_ICON_NAME, "icon.ico", "icon.png"):
-            option = base / name
-            if option.is_file():
-                return option
+    if not assets.is_dir():
+        return None
+
+    for name in (TRAY_ICON_NAME, "icon.png", "icon.ico"):
+        option = assets / name
+        if option.is_file():
+            return option
     return None
 
 
@@ -121,8 +125,13 @@ def run_tray(
         try:
             on_quit()
         finally:
+            # The icon has to stop either way, or the program keeps
+            # running with no way to get out of it.
             if icon_obj is not None:
                 icon_obj.stop()
+            else:
+                icon.stop()
+
 
     items: list[Any] = [
         pystray.MenuItem("打开主界面", lambda: on_show(), default=True),
@@ -153,3 +162,4 @@ def run_tray(
     icon.menu = pystray.Menu(*items)
     icon.run()
     return 0
+
