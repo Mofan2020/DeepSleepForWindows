@@ -96,12 +96,18 @@ jobs:
           # bundle is built without the window.
           pip install .
 
-      # The core is checked on Linux above; these tests need a real
-      # Windows machine because they call powercfg and the Win32 API.
-      # The marker is given explicitly because the default in
-      # pyproject.toml excludes them.
-      - name: Windows-only tests
-        run: pytest -q -m windows -p no:cacheprovider --override-ini="addopts=-q --strict-markers"
+      # The core is checked on Linux above.  What is left are the
+      # tests that need a real Windows machine: they call powercfg and
+      # the Win32 API, and they look at the permissions of a file the
+      # way Windows really records them.
+      #
+      # The whole suite runs here, not only the ones marked "windows".
+      # A test that skips itself when it is not on Windows is silently
+      # doing nothing on the Linux runner, so those tests were never
+      # actually run by anything.  The default in pyproject.toml
+      # excludes the marked ones, so the setting is overridden here.
+      - name: Tests on Windows
+        run: pytest -q -p no:cacheprovider --override-ini="addopts=-q --strict-markers"
 
       - name: Build the executable
         run: pyinstaller --clean --noconfirm main.spec

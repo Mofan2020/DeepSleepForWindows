@@ -11,6 +11,8 @@ import argparse
 
 from winsleep.cli import build_parser
 from winsleep.core import elevate, gpu, install
+from winsleep.core.decide import Intent
+from winsleep.core.servermode import Phase
 
 # ------------------------------------------------------- the elevation mark
 
@@ -145,3 +147,93 @@ def test_an_unknown_command_is_still_refused() -> None:
 
 def test_the_parser_is_an_argparse_parser() -> None:
     assert isinstance(build_parser(), argparse.ArgumentParser)
+
+
+
+# ------------------------------------------------- the log that fills up
+
+
+def test_the_same_decision_is_not_written_to_the_log_again():
+    """A line that says the same thing must not be written again.
+
+    The daemon compares the new intent with the last one to decide
+    whether anything changed.  It compared the whole intent, and the
+    intent carries the reason - "idle for 8704s" - which is a live
+    number that grows every tick.  Two intents that asked for exactly
+    the same thing therefore never looked the same, and the daemon
+    wrote a line about the plan every five seconds.
+
+    On a machine that sat idle over the night that was five hundred
+    lines of the same sentence, and the log had to be trimmed away
+    every minute to keep up.
+    """
+    from winsleep.core.daemon import Daemon
+
+    first = Intent(plan="节能", reason="idle for 8704s")
+    second = Intent(plan="节能", reason="idle for 8709s")
+
+    assert Daemon._same_decision(first, second)
+
+
+def test_a_different_plan_is_still_a_different_decision():
+    from winsleep.core.daemon import Daemon
+
+    one = Intent(plan="节能", reason="idle for 8704s")
+    other = Intent(plan="Bitsum Highest Performance", reason="the user is active")
+
+    assert not Daemon._same_decision(one, other)
+
+
+def test_the_lock_countdown_does_not_make_a_new_decision():
+    """The seconds left on the lock tick down every second.
+
+    The daemon never acts on that number - it only tells the interface
+    how long is left - so it must not make every tick look like a
+    change.
+    """
+    from winsleep.core.daemon import Daemon
+
+    one = Intent(plan=None, lock_in=200, phase=Phase.WAITING_FOR_IDLE)
+    other = Intent(plan=None, lock_in=195, phase=Phase.WAITING_FOR_IDLE)
+
+    assert Daemon._same_decision(one, other)
+
+
+def test_nothing_is_the_same_as_something():
+    from winsleep.core.daemon import Daemon
+
+    assert not Daemon._same_decision(None, Intent(plan="节能"))
+    assert not Daemon._same_decision(Intent(plan="节能"), None)
+    assert Daemon._same_decision(None, None)
+
+
+def test_two_ticks_with_the_same_decision_write_one_line(caplog):
+    """The log must not fill up with the same sentence.
+
+    This drives the real tick, not the helper, because the helper is
+    what the bug was in: the tick asked "is this the same decision?"
+    and the helper answered it wrongly.
+    """
+    import time
+
+    from winsleep.core import daemon as daemon_mod
+
+    daemon = daemon_mod.Daemon()
+    daemon._config_path = __import__("pathlib").Path("/nonexistent/config.json")
+
+    # The agent reports a fresh idle time, so the daemon decides the
+    # machine is idle and wants the idle plan.
+    daemon._server.agent.idle_seconds = 8704.0
+    daemon._server.agent.updated_at = time.time()
+
+    with caplog.at_level("INFO", logger="winsleep.daemon"):
+        daemon._tick()
+        daemon._server.agent.idle_seconds = 8709.0
+        daemon._tick()
+
+    lines = [
+        record.getMessage()
+        for record in caplog.records
+        if "the plan should be" in record.getMessage()
+    ]
+    assert len(lines) == 1, lines

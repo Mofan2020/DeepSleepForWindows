@@ -363,7 +363,7 @@ class Daemon:
         config = config_mod.load(self._config_path)
         self._trim_log(config)
         intent = self._decide(config)
-        if intent != self._last_intent:
+        if not self._same_decision(intent, self._last_intent):
             log.info(
                 "the plan should be %s (%s)",
                 intent.plan or "unchanged",
@@ -371,6 +371,33 @@ class Daemon:
             )
             self._last_intent = intent
         self._apply(config, intent)
+
+    @staticmethod
+    def _same_decision(one: Intent | None, other: Intent | None) -> bool:
+        """True when two intents ask for the same thing.
+
+        Comparing the whole intent is not enough.  The reason carries a
+        live number - "idle for 8704s" - that changes every single
+        tick, so two intents that ask for exactly the same thing would
+        never look the same.  The daemon would then write a line about
+        the plan on every tick, which is what filled the log with the
+        same sentence five hundred times.
+
+        What matters is what the daemon does: which plan it puts in
+        place, whether it holds the machine awake, whether it locks the
+        screen, and where the server mode countdown stands.  The
+        wording of the reason is only there for the log, and so is the
+        number of seconds left on the lock - it ticks down every
+        second and the daemon never acts on it.
+        """
+        if one is None or other is None:
+            return one is other
+        return (
+            one.plan == other.plan
+            and one.keep_awake == other.keep_awake
+            and one.lock_screen == other.lock_screen
+            and one.phase == other.phase
+        )
 
     def _trim_log(self, config: config_mod.Config) -> None:
         """Keep the log file within the limits the user set.

@@ -304,6 +304,21 @@ MUTATIONS: list[tuple[str, Path, str, str]] = [
         '''                plan = action.value.strip()
                 reason = f"rule: {rule.name}"''',
     ),
+    (
+        "the same decision is written to the log again and again",
+        SRC / "core" / "daemon.py",
+        "        if not self._same_decision(intent, self._last_intent):",
+        "        if intent != self._last_intent:",
+    ),
+    (
+        "the lock countdown makes every tick look like a change",
+        SRC / "core" / "daemon.py",
+        "            and one.lock_screen == other.lock_screen\n"
+        "            and one.phase == other.phase",
+        "            and one.lock_screen == other.lock_screen\n"
+        "            and one.lock_in == other.lock_in\n"
+        "            and one.phase == other.phase",
+    ),
 ]
 
 

@@ -59,14 +59,42 @@ def test_the_rights_are_read_from_the_file() -> None:
 
 
 def test_a_file_that_the_user_may_write_to_is_left_alone(tmp_path: Path) -> None:
+    """A file the user may already write to must not be touched.
+
+    The first call may well change something: the file was made by
+    whichever copy of the program started first, and when that was the
+    window - which asks for administrator rights - the file belongs to
+    the administrators and the daemon, which runs as the plain user,
+    cannot write to it.  That is exactly the bug this module exists
+    for, and the first call has to repair it.
+
+    The second call has to change nothing.  The program asks for the
+    right every time it starts, and every call after the first one
+    must leave the file alone.
+    """
     if sys.platform != "win32":
         pytest.skip("this is not a Windows machine")
     path = tmp_path / "log.txt"
     path.write_text("hello", encoding="utf-8")
     assert acl._current_user()
-    # A file the user made has the user in its permissions, so nothing
-    # has to be changed.
+
+    acl.make_user_writable(path)
+
     assert acl.make_user_writable(path) is False
+
+
+def test_the_user_can_write_after_the_rights_were_given(tmp_path: Path) -> None:
+    """The point of the whole thing: the user can write afterwards."""
+    if sys.platform != "win32":
+        pytest.skip("this is not a Windows machine")
+    path = tmp_path / "log.txt"
+    path.write_text("hello", encoding="utf-8")
+
+    acl.make_user_writable(path)
+
+    with open(path, "a", encoding="utf-8") as handle:
+        handle.write("more")
+    assert "more" in path.read_text(encoding="utf-8")
 
 
 def test_the_log_file_is_made_writable_when_the_program_starts() -> None:
