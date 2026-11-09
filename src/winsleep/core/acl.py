@@ -67,7 +67,7 @@ def _make_user_writable_windows(path: Path) -> bool:
     if not path.exists():
         return False
 
-    user = _current_user()
+    user = _current_user_sid()
     if not user:
         return False
 
@@ -82,22 +82,152 @@ def _make_user_writable_windows(path: Path) -> bool:
 
 
 def _current_user() -> str:
-    """The name of the user of this process, for example ``DESKTOP\\me``."""
-    try:
-        import getpass
+    """The user of this process, as the name Windows knows it by.
 
-        name = getpass.getuser()
-    except Exception:  # noqa: BLE001 - the name is not always known
-        name = ""
-    if not name:
+    The name is read from the token of the process, not from the
+    environment.  The environment has ``USERDOMAIN``, and that says
+    ``WORKGROUP`` on a machine that is not in a domain - while the
+    account belongs to the machine itself.  A permission given to
+    ``WORKGROUP\\me`` is given to nobody.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    except (AttributeError, OSError):
         return ""
 
-    # The domain is not always in the name.  It has to be, or the
-    # permission is given to a user of another domain.
-    domain = os.environ.get("USERDOMAIN", "")
-    if domain and "\\\\" not in name:
-        return f"{domain}\\\\{name}"
-    return name
+    advapi32.OpenProcessToken.restype = wintypes.BOOL
+    advapi32.OpenProcessToken.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+    ]
+    advapi32.GetTokenInformation.restype = wintypes.BOOL
+    advapi32.GetTokenInformation.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.LookupAccountSidW.restype = wintypes.BOOL
+    advapi32.LookupAccountSidW.argtypes = [
+        wintypes.LPCWSTR,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    # The type of the sid is an output, and it is not a parameter:
+    # the function takes six arguments, not seven.
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    token = wintypes.HANDLE()
+    if not advapi32.OpenProcessToken(
+        kernel32.GetCurrentProcess(), 0x0008, ctypes.byref(token)
+    ):
+        return ""
+    try:
+        buffer = ctypes.create_string_buffer(1024)
+        needed = wintypes.DWORD()
+        if not advapi32.GetTokenInformation(
+            token, 1, buffer, 1024, ctypes.byref(needed)
+        ):
+            return ""
+        # The first pointer of the buffer is the sid.
+        sid = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_void_p))[0]
+        if not sid:
+            return ""
+
+        name = ctypes.create_unicode_buffer(256)
+        name_size = wintypes.DWORD(256)
+        domain = ctypes.create_unicode_buffer(256)
+        domain_size = wintypes.DWORD(256)
+        if not advapi32.LookupAccountSidW(
+            None,
+            sid,
+            name,
+            ctypes.byref(name_size),
+            domain,
+            ctypes.byref(domain_size),
+        ):
+            return ""
+        return f"{domain.value}\\{name.value}"
+    finally:
+        kernel32.CloseHandle(token)
+
+
+def _current_user_sid() -> str:
+    """The sid of the user of this process, as a string.
+
+    ``icacls`` takes the sid in the form ``*S-1-5-21-...`` and works
+    it out itself.  That is better than a name, because a name can
+    belong to a different account on another machine.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    try:
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    except (AttributeError, OSError):
+        return ""
+
+    advapi32.OpenProcessToken.restype = wintypes.BOOL
+    advapi32.OpenProcessToken.argtypes = [
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+    ]
+    advapi32.GetTokenInformation.restype = wintypes.BOOL
+    advapi32.GetTokenInformation.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+    advapi32.ConvertSidToStringSidW.argtypes = [
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_void_p),
+    ]
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.LocalFree.restype = ctypes.c_void_p
+    kernel32.LocalFree.argtypes = [ctypes.c_void_p]
+
+    token = wintypes.HANDLE()
+    if not advapi32.OpenProcessToken(
+        kernel32.GetCurrentProcess(), 0x0008, ctypes.byref(token)
+    ):
+        return ""
+    try:
+        buffer = ctypes.create_string_buffer(1024)
+        needed = wintypes.DWORD()
+        if not advapi32.GetTokenInformation(
+            token, 1, buffer, 1024, ctypes.byref(needed)
+        ):
+            return ""
+        sid = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_void_p))[0]
+        if not sid:
+            return ""
+        text = ctypes.c_void_p()
+        if not advapi32.ConvertSidToStringSidW(sid, ctypes.byref(text)):
+            return ""
+        try:
+            return ctypes.cast(text, ctypes.c_wchar_p).value or ""
+        finally:
+            kernel32.LocalFree(text)
+    finally:
+        kernel32.CloseHandle(token)
 
 
 def _user_may_write(path: Path, user: str) -> bool:
@@ -111,8 +241,9 @@ def _user_may_write(path: Path, user: str) -> bool:
     if output is None:
         return False
 
+    name = _current_user()
     for line in output.splitlines():
-        if user.lower() not in line.lower():
+        if name.lower() not in line.lower():
             continue
         # The line looks like "name:(F)" or "name:(M,F)".  The letters
         # in the brackets say what is allowed: F is full, M is modify,
@@ -126,8 +257,12 @@ def _user_may_write(path: Path, user: str) -> bool:
 
 def _grant(path: Path, user: str) -> bool:
     """Give the user the right to write to the file."""
+    # The sid is written in the form ``*S-1-5-21-...``.  The star
+    # tells ``icacls`` that what follows is a sid and not a name, so
+    # it does not have to look one up - and a name that does not exist
+    # would quietly do nothing.
     result = _run(
-        ["icacls", str(path), "/grant", f"{user}:(F)"]
+        ["icacls", str(path), "/grant", f"*{user}:(F)"]
     )
     return result is not None and result.returncode == 0
 
