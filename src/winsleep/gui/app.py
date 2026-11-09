@@ -40,6 +40,37 @@ WINDOW_TITLE = "DeepSleep For Windows(Beta)"
 WINDOW_SIZE = (940, 720)
 
 
+def _ensure_admin() -> bool:
+    """Make sure the program runs with administrator rights.
+
+    The window changes the power plan and registers the scheduled tasks,
+    so it needs administrator rights.  When it is started by double
+    clicking the executable and does not have them, Windows is asked to
+    give them - and this copy ends, letting the new one take over.
+
+    The marker in the command line keeps the new copy from asking a
+    second time, and it also keeps the program from looping when the
+    user says "no" to the prompt.
+
+    Returns True when the program may carry on.
+    """
+    from ..core import elevate
+
+    if elevate.is_admin():
+        return True
+
+    if elevate.was_elevated():
+        # The user said no to the prompt.  Carrying on without
+        # administrator rights is better than asking forever.
+        log.warning("the program is not running as administrator")
+        return True
+
+    log.info("administrator rights are needed; asking Windows for them")
+    if not elevate.elevate_and_exit():
+        log.warning("the elevation was refused; carrying on without it")
+    return False
+
+
 def run() -> int:
     """Open the window.  Returns the process exit code."""
     try:
@@ -53,6 +84,21 @@ def run() -> int:
     if not assets.is_dir():
         raise RuntimeError(f"the interface files are missing: {assets}")
 
+    # The window needs administrator rights.  When it does not have
+    # them, a second copy is started with them and this one ends.
+    if not _ensure_admin():
+        return 0
+
+    # Only one copy of the window may be open.  When there already is
+    # one, this copy gives up instead of opening a second window.
+    from ..core import single
+
+    instance = single.SingleInstance()
+    instance.acquire()
+    if not instance.is_first:
+        log.info("there is already a window; this copy gives up")
+        return 0
+
     bridge = Bridge()
     window = webview.create_window(
         WINDOW_TITLE,
@@ -65,7 +111,10 @@ def run() -> int:
     # The bridge needs the window to open the file dialog, and the
     # window only exists after it has been created.
     bridge.attach_window(window)
-    webview.start()
+    try:
+        webview.start()
+    finally:
+        instance.release()
     return 0
 
 

@@ -7,7 +7,7 @@
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Release](https://img.shields.io/badge/release/Mofan2020/DeepSleepForWindows)
 
-- **Version**: 0.2.0
+- **Version**: 0.3.0
 - **Language**: Python 3.11+, pywebview
 - **License**: MIT
 
@@ -35,9 +35,17 @@ DeepSleep For Windows does that, and it lets you write your own rules on top.
   stop them from the window.
 - **Your own power plans** — copy a plan and change what is inside it: when the
   screen goes dark, when the machine sleeps, when it hibernates, how far the
-  processor may drop.
+  processor may drop. Restore a built-in plan to the values Windows ships with.
+- **Two ready-made plans** — *DSForWin 最节能* and *DSForWin 最高性能*, created on
+  demand from a copy of the Balanced plan.
+- **GPU power saving** — set the graphics preference to power saving or maximum
+  performance, and watch the load the driver reports.
 - **A window, if you want one** — a small pywebview interface for the settings and
   the live state.
+- **The log, live** — read the log while it is being written, trim it by line count
+  or by age, or clear it.
+- **Stays out of the way** — a tray icon in the notification area, and only one
+  copy of the program running at a time.
 
 ## How it works
 
@@ -72,7 +80,9 @@ DeepSleepForWindows.exe install
 ```
 
 That registers two scheduled tasks. The daemon starts at logon, and the agent
-starts in your own session so it can read the real idle time.
+starts in your own session so it can read the real idle time. A third task for the
+tray icon is registered too, but only if the machine allows it — the daemon and
+the agent are what matter, so a refused tray task does not fail the install.
 
 To open the window: double click the exe, or
 
@@ -90,14 +100,22 @@ The program has no console window, so double clicking it does not flash a black
 box. When something goes wrong it shows a message box with the reason and the
 place of the log file.
 
+Double clicking asks Windows for administrator rights, because changing power
+plans and restoring their defaults needs them. If you say no, the program keeps
+running with what it can do and writes the reason to the log.
+
 ## Command line
 
 ```bat
 DeepSleepForWindows gui                 open the window
+DeepSleepForWindows tray                run in the notification area, no window
 DeepSleepForWindows status          print the current state as JSON
 DeepSleepForWindows plans           list the power plans
 DeepSleepForWindows switch "Balanced"   switch the power plan now
 DeepSleepForWindows lock            lock the screen now
+DeepSleepForWindows sleep [--hibernate]  put the machine to sleep now
+DeepSleepForWindows doctor              check that the setup is right
+DeepSleepForWindows selftest            check that the bundle is complete
 DeepSleepForWindows install             register the scheduled tasks
 DeepSleepForWindows uninstall           remove them
 ```
@@ -120,9 +138,14 @@ them; the file is plain JSON and can be edited by hand.
   "server_lock_seconds": 300,
   "keep_awake": false,
   "rules": [],
+  "log_max_lines": 0,
+  "log_max_age_days": 0.0,
   "last_plan_guid": ""
 }
 ```
+
+`log_max_lines` and `log_max_age_days` trim the log file for you. Both are `0`
+means no limit.
 
 ### Rule conditions
 

@@ -56,6 +56,8 @@ const code = [
   extract('renderGames'),
   extract('renderService'),
   extract('serviceButton'),
+  extract('renderOwnPlans'),
+  extract('renderGpu'),
   extract('refresh'),
 ].join('\n\n');
 
@@ -198,7 +200,12 @@ async function runRefresh(getState) {
   const scope = vm.createContext({
     ...context,
     $: (id) => set.get(id),
-    api: () => ({ get_state: getState, service_status: () => Promise.resolve(null) }),
+    api: () => ({
+      get_state: getState,
+      service_status: () => Promise.resolve(null),
+      own_plans: () => Promise.resolve({ ok: true, plans: [] }),
+      gpu_state: () => Promise.resolve({ supported: false, message: 'not supported' }),
+    }),
     document: {
       activeElement: null,
       createElement: () => element(),
@@ -263,7 +270,11 @@ test('a service button that fails says what went wrong', async () => {
   const scope = vm.createContext({
     ...context,
     $: (id) => set.get(id),
-    api: () => ({ get_state: () => Promise.resolve({ config: {}, plans: [], plan_guids: [] }) }),
+    api: () => ({
+      get_state: () => Promise.resolve({ config: {}, plans: [], plan_guids: [] }),
+      own_plans: () => Promise.resolve({ ok: true, plans: [] }),
+      gpu_state: () => Promise.resolve({ supported: false, message: 'not supported' }),
+    }),
     document: { activeElement: null, createElement: () => element() },
     setTimeout,
     clearTimeout,
@@ -297,7 +308,11 @@ test('a service button that fails with a result says what went wrong', async () 
   const scope = vm.createContext({
     ...context,
     $: (id) => set.get(id),
-    api: () => ({ get_state: () => Promise.resolve({ config: {}, plans: [], plan_guids: [] }) }),
+    api: () => ({
+      get_state: () => Promise.resolve({ config: {}, plans: [], plan_guids: [] }),
+      own_plans: () => Promise.resolve({ ok: true, plans: [] }),
+      gpu_state: () => Promise.resolve({ supported: false, message: 'not supported' }),
+    }),
     document: { activeElement: null, createElement: () => element() },
     setTimeout,
     clearTimeout,

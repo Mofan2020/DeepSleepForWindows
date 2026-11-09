@@ -17,7 +17,6 @@ One entry point for everything:
 from __future__ import annotations
 
 import argparse
-import ctypes
 import json
 import logging
 import logging.handlers
@@ -32,29 +31,16 @@ log = logging.getLogger("winsleep.cli")
 
 def _is_admin() -> bool:
     """Check if the current process has administrator privileges."""
-    if sys.platform != "win32":
-        return True  # Non-Windows doesn't need elevation
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except Exception:
-        return False
+    from .core import elevate
+
+    return elevate.is_admin()
 
 
 def _elevate_and_exit(args: list[str]) -> None:
-    """Re-launch the current executable with administrator privileges and exit.
+    """Re-launch the current executable with administrator privileges and exit."""
+    from .core import elevate
 
-    Uses ShellExecuteW with "runas" verb to trigger UAC prompt.
-    """
-    if sys.platform != "win32":
-        return
-    try:
-        executable = sys.executable
-        params = " ".join(f'"{a}"' if " " in a else a for a in args)
-        # SW_SHOWNORMAL = 1
-        ctypes.windll.shell32.ShellExecuteW(None, "runas", executable, params, None, 1)
-    except Exception:
-        pass
-    sys.exit(0)
+    elevate.elevate_and_exit(args)
 
 
 def _attach_parent_console() -> None:
@@ -181,6 +167,33 @@ def _open_window() -> int:
         return 2
 
 
+def _cmd_tray(_args: argparse.Namespace) -> int:
+    """Stay in the notification area without showing a window."""
+    from .core import tray, winapi, winpower
+
+    def _show() -> None:
+        # The window is opened by the same program in a second copy, so
+        # that only one window exists at a time.
+        try:
+            _elevate_and_exit([sys.executable, "gui"])
+        except SystemExit:
+            pass
+
+    def _lock() -> None:
+        winapi.lock_workstation()
+
+    def _quit() -> None:
+        log.info("the program was left from the notification area")
+
+    def _plans() -> list[tuple[str, str]]:
+        return winpower.list_plans()
+
+    def _switch(guid: str) -> None:
+        winpower.set_active_plan(guid)
+
+    return tray.run_tray(_show, _lock, _quit, _plans, _switch)
+
+
 def _cmd_gui(_args: argparse.Namespace) -> int:
     return _open_window()
 
@@ -291,11 +304,22 @@ def _cmd_selftest(_args: argparse.Namespace) -> int:
         "winsleep.core.winpower",
         "winsleep.core.daemon",
         "winsleep.core.agent",
+        "winsleep.core.elevate",
+        "winsleep.core.gpu",
+        "winsleep.core.logs",
+        "winsleep.core.ownplans",
+        "winsleep.core.planrestore",
+        "winsleep.core.single",
+        "winsleep.core.tray",
     ]
     if sys.platform == "win32":
         # The Windows backend is loaded by name at runtime.
         wanted.append("webview.platforms.winforms")
         wanted.append("clr")
+        # The notification area icon needs these as well.
+        wanted.append("pystray")
+        wanted.append("pystray._win32")
+        wanted.append("PIL.Image")
     missing = []
     for name in wanted:
         try:
@@ -386,6 +410,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command")
 
     sub.add_parser("gui", help="open the window").set_defaults(func=_cmd_gui)
+    sub.add_parser(
+        "tray", help="stay in the notification area without a window"
+    ).set_defaults(func=_cmd_tray)
     sub.add_parser("daemon", help="run the background half").set_defaults(func=_cmd_daemon)
     sub.add_parser("agent", help="run the session half").set_defaults(func=_cmd_agent)
     sub.add_parser("install", help="register the scheduled tasks").set_defaults(func=_cmd_install)

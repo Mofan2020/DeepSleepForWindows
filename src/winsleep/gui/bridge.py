@@ -176,7 +176,7 @@ class Bridge:
                 return {"ok": True, "rules": [r.to_dict() for r in config.rules]}
         return {"ok": False, "message": f"no such rule: {name}"}
 
-    def open_log(self) -> dict[str, Any]:
+    def open_log(self, max_lines: int = 0) -> dict[str, Any]:
         """The last lines of the log, so the interface can show them."""
         try:
             text = paths.log_path().read_text(encoding="utf-8", errors="replace")
@@ -184,6 +184,74 @@ class Bridge:
             return {"ok": False, "lines": []}
         lines = text.splitlines()[-200:]
         return {"ok": True, "lines": lines}
+
+    def log_tail(self, after: int = 0) -> dict[str, Any]:
+        """The log lines that are newer than the byte offset *after*.
+
+        The window keeps the offset it got last time and sends it back,
+        so the answer is only what was written since.  That is what
+        makes the live view cheap: the whole file is never read again.
+
+        When the file has been cleared or trimmed the offset points past
+        the end of it.  That is answered with the whole file and the new
+        offset, so the window recovers on its own.
+        """
+
+        path = paths.log_path()
+        try:
+            size = path.stat().st_size
+        except OSError:
+            return {"ok": True, "lines": [], "offset": after, "cleared": False}
+
+        if after > size:
+            # The file was shortened.  Start over from the top.
+            after = 0
+
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                handle.seek(after)
+                text = handle.read()
+                offset = handle.tell()
+        except OSError:
+            return {"ok": False, "lines": [], "offset": after, "cleared": False}
+
+        lines = text.splitlines()
+        if not text.endswith("\n") and lines:
+            # The last line is still being written.  Leave it for the
+            # next round instead of showing half of it.
+            cut = text.rfind("\n") + 1
+            offset -= len(text) - cut
+            lines = lines[:-1]
+
+        return {
+            "ok": True,
+            "lines": lines,
+            "offset": offset,
+            "cleared": after == 0 and size == 0,
+        }
+
+    def clear_log(self) -> dict[str, Any]:
+        """Empty the log file."""
+        from ..core import logs
+
+        return logs.clear_log(paths.log_path())
+
+    def trim_log(self, max_lines: int = 0, max_age_days: float = 0.0) -> dict[str, Any]:
+        """Drop the old lines from the log file.
+
+        The numbers come from the settings when they are not given, so
+        the button "apply the limits" works without the window having
+        to pass anything.
+        """
+        from ..core import logs
+
+        config = self._load()
+        lines = int(max_lines) if max_lines else config.log_max_lines
+        days = float(max_age_days) if max_age_days else config.log_max_age_days
+        result = logs.trim_log(paths.log_path(), lines, days)
+        if result.get("changed"):
+            logs.prune_rotated(paths.log_path(), keep=1)
+        return result
 
     # -- the background service -------------------------------------------
 
@@ -384,6 +452,75 @@ class Bridge:
             return {
                 "ok": False,
                 "message": "后台服务没有在运行，复制不了电源计划。先在上面启动它。",
+            }
+        return {
+            "ok": bool(reply.get("ok")),
+            "message": reply.get("message", ""),
+            "guid": reply.get("guid", ""),
+        }
+
+    def restore_plan(self, guid: str) -> dict[str, Any]:
+        """Put a built-in plan back the way Windows made it.
+
+        Only the plans Windows ships with can be restored.  A plan the
+        user made themselves has no default version, so the interface
+        does not offer the button for those.
+        """
+        from ..core import planrestore
+
+        if not planrestore.is_built_in(guid):
+            return {
+                "ok": False,
+                "message": "这是你自己建的计划，没有可以恢复的默认值。",
+            }
+
+        reply = self._daemon_request({"kind": "restore_plan", "guid": guid})
+        if reply is None:
+            return {
+                "ok": False,
+                "message": "后台服务没有在运行，恢复不了。先在上面启动它。",
+            }
+        return {"ok": bool(reply.get("ok")), "message": reply.get("message", "")}
+
+    def restorable_plans(self) -> dict[str, Any]:
+        """The plans that can be restored to the Windows defaults."""
+        from ..core import planrestore, winpower
+
+        return {"ok": True, "plans": planrestore.restorable_plans(winpower.list_plans())}
+
+    def gpu_state(self) -> dict[str, Any]:
+        """What the program found out about the graphics card."""
+        from ..core import gpu
+
+        try:
+            return gpu.gpu_state().to_dict()
+        except Exception as exc:  # noqa: BLE001 - the interface has to know
+            log.warning("the graphics card could not be read: %s", exc)
+            return {"supported": False, "message": str(exc)}
+
+    def set_gpu_preference(self, preference: str) -> dict[str, Any]:
+        """Tell the driver which way to lean when the card is idle."""
+        from ..core import gpu
+
+        try:
+            return gpu.set_gpu_preference(preference).to_dict()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("the graphics preference could not be set: %s", exc)
+            return {"supported": False, "message": str(exc)}
+
+    def own_plans(self) -> dict[str, Any]:
+        """The plans the program can make, ready for the interface."""
+        from ..core import ownplans
+
+        return {"ok": True, "plans": ownplans.own_plan_settings()}
+
+    def create_own_plan(self, kind: str) -> dict[str, Any]:
+        """Make one of the program's own power plans."""
+        reply = self._daemon_request({"kind": "create_plan", "plan_kind": kind})
+        if reply is None:
+            return {
+                "ok": False,
+                "message": "后台服务没有在运行，建不了计划。先在上面启动它。",
             }
         return {
             "ok": bool(reply.get("ok")),

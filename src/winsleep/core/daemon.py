@@ -42,6 +42,11 @@ TICK_SECONDS = 5.0
 #: the user is told that something else is fighting over it.
 PLAN_FAILURE_LIMIT = 3
 
+#: How often the daemon trims the log file.  The file is written by
+#: three processes, and rewriting it on every tick would be a lot of
+#: work for nothing.
+LOG_TRIM_INTERVAL_SECONDS = 60.0
+
 #: How often the daemon refreshes the "keep awake" execution state.
 #: Windows drops the state if it is not refreshed, so this has to be
 #: more frequent than the tick.
@@ -160,6 +165,10 @@ class StateServer:
             return self._duplicate_plan(message)
         if kind == "delete_plan":
             return self._delete_plan(message)
+        if kind == "restore_plan":
+            return self._restore_plan(message)
+        if kind == "create_plan":
+            return self._create_plan(message)
         if kind == "report":
             try:
                 idle = float(message.get("idle_seconds", -1.0))
@@ -232,6 +241,36 @@ class StateServer:
             ensure_ascii=False,
         ).encode("utf-8")
 
+    def _restore_plan(self, message: dict[str, Any]) -> bytes:
+        """Put a built-in plan back the way Windows made it.
+
+        The settings live under ``HKEY_LOCAL_MACHINE``, so this has to
+        happen in the daemon, which runs with administrator rights.
+        """
+        from . import planrestore
+
+        guid = str(message.get("guid", "")).strip()
+        if not guid:
+            return json.dumps({"ok": False, "message": "没有指定电源计划"}, ensure_ascii=False).encode("utf-8")
+        ok, detail = planrestore.restore_plan(guid)
+        if ok:
+            log.info("the plan %s was restored to the Windows defaults", guid)
+        return json.dumps({"ok": ok, "message": detail}, ensure_ascii=False).encode("utf-8")
+
+    def _create_plan(self, message: dict[str, Any]) -> bytes:
+        """Create one of the program's own power plans.
+
+        A built-in plan is copied and renamed, and then the settings
+        that make it what it is are written into the copy.
+        """
+        from . import ownplans
+
+        kind = str(message.get("plan_kind", "")).strip()
+        ok, detail = ownplans.create_own_plan(kind)
+        if ok:
+            log.info("the own plan %s was created", kind)
+        return json.dumps({"ok": ok, "message": detail, "guid": detail if ok else ""}, ensure_ascii=False).encode("utf-8")
+
     def _delete_plan(self, message: dict[str, Any]) -> bytes:
         """Delete a power plan."""
         from . import powersettings
@@ -260,6 +299,8 @@ class Daemon:
         self._plan_failures = 0
         #: Set when another program seems to hold the power plan.
         self._conflict_warning: str = ""
+        #: When the log file was last trimmed.
+        self._last_log_trim: float = 0.0
 
     # -- lifecycle -------------------------------------------------------
 
@@ -320,6 +361,7 @@ class Daemon:
 
     def _tick(self) -> None:
         config = config_mod.load(self._config_path)
+        self._trim_log(config)
         intent = self._decide(config)
         if intent != self._last_intent:
             log.info(
@@ -329,6 +371,41 @@ class Daemon:
             )
             self._last_intent = intent
         self._apply(config, intent)
+
+    def _trim_log(self, config: config_mod.Config) -> None:
+        """Keep the log file within the limits the user set.
+
+        The daemon does this rather than the window, because the daemon
+        is the one that keeps running.  A window that is closed for a
+        week must not leave an unbounded log behind.
+
+        The trim runs at most once a minute: the file is written by
+        three processes, and rewriting it on every tick would be a lot
+        of work for nothing.
+        """
+        if not config.log_max_lines and not config.log_max_age_days:
+            return
+
+        now = time.time()
+        if now - self._last_log_trim < LOG_TRIM_INTERVAL_SECONDS:
+            return
+        self._last_log_trim = now
+
+        try:
+            from . import logs
+
+            result = logs.trim_log(
+                paths.log_path(), config.log_max_lines, config.log_max_age_days
+            )
+            if result.get("changed"):
+                logs.prune_rotated(paths.log_path(), keep=1)
+                log.info(
+                    "the log was trimmed: %d lines removed, %d left",
+                    result.get("removed", 0),
+                    result.get("after", 0),
+                )
+        except OSError as exc:
+            log.warning("the log could not be trimmed: %s", exc)
 
     def _decide(self, config: config_mod.Config) -> Intent:
         idle_seconds = self._server.agent.idle_seconds

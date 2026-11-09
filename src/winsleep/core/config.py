@@ -61,6 +61,14 @@ class Config:
     #: on this one.
     last_plan_guid: str = ""
 
+    #: How many lines the log file keeps.  Zero means "no limit on the
+    #: number of lines".
+    log_max_lines: int = 0
+
+    #: How many days of log lines are kept.  Zero means "no limit on the
+    #: age of the lines".
+    log_max_age_days: float = 0.0
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "idle_plan": self.idle_plan,
@@ -74,6 +82,8 @@ class Config:
             "keep_awake": self.keep_awake,
             "rules": [rule.to_dict() for rule in self.rules],
             "last_plan_guid": self.last_plan_guid,
+            "log_max_lines": self.log_max_lines,
+            "log_max_age_days": self.log_max_age_days,
         }
 
     @classmethod
@@ -96,6 +106,8 @@ class Config:
             keep_awake=bool(raw.get("keep_awake", False)),
             rules=[Rule.from_dict(r) for r in raw.get("rules", []) or []],
             last_plan_guid=str(raw.get("last_plan_guid", "") or ""),
+            log_max_lines=max(0, int(_number(raw, "log_max_lines", 0))),
+            log_max_age_days=max(0.0, float(_number(raw, "log_max_age_days", 0.0))),
         )
 
 

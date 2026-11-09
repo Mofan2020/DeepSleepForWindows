@@ -96,6 +96,7 @@
           <select id="editPlanSelect" class="select"></select>
           <button class="btn" id="duplicatePlanBtn">复制一份</button>
           <button class="btn ghost" id="deletePlanBtn">删除</button>
+          <button class="btn ghost" id="restorePlanBtn">恢复默认</button>
         </div>
       </div>
 
@@ -107,6 +108,30 @@
         <button class="btn primary" id="savePlanBtn">保存改动</button>
         <span class="hint" id="planSaveHint"></span>
       </div>
+    </div>
+
+    <div class="panel glass">
+      <div class="panel-head">
+        <div class="grow">
+          <h2>DSForWin 自带电源计划</h2>
+          <p class="muted">这两个是程序自己造的，比系统自带的更极端。</p>
+        </div>
+      </div>
+      <div id="ownPlanList" class="cards"></div>
+    </div>
+
+    <div class="panel glass">
+      <div class="panel-head">
+        <div class="grow">
+          <h2>显卡省电</h2>
+          <p class="muted">显卡闲着的时候让驱动优先省电，这样它有机会进入低功耗状态。</p>
+        </div>
+        <div class="row-actions">
+          <select id="gpuPreference" class="select"></select>
+          <button class="btn" id="gpuApplyBtn">应用</button>
+        </div>
+      </div>
+      <p class="hint" id="gpuHint"></p>
     </div>
 
     <div class="panel glass">
@@ -217,10 +242,43 @@
   <section class="page" id="page-logs" hidden>
     <div class="panel glass">
       <div class="panel-head">
-        <h2 class="grow">日志</h2>
-        <button class="btn ghost" id="openLogBtn">读取</button>
+        <div class="grow">
+          <h2>日志</h2>
+          <p class="muted">进这个页面就开始实时显示，不用点读取。</p>
+        </div>
+        <div class="row-actions">
+          <label class="switch">
+            <input type="checkbox" id="logFollowToggle" checked>
+            <span>自动滚动</span>
+          </label>
+          <button class="btn ghost" id="openLogBtn">重新读取</button>
+          <button class="btn ghost" id="clearLogBtn">清空日志</button>
+        </div>
       </div>
       <pre class="log" id="logView"></pre>
+      <p class="hint" id="logHint"></p>
+    </div>
+
+    <div class="panel glass">
+      <h2>自动清理</h2>
+      <p class="muted">日志超过限制时自动删掉旧的部分。填 0 表示不限。</p>
+      <div class="cards">
+        <div class="card glass">
+          <div class="card-label">最多保留行数</div>
+          <div class="card-actions">
+            <span class="hint">保留 <input id="logMaxLines" class="num" type="number" min="0" step="100"> 行</span>
+          </div>
+        </div>
+        <div class="card glass">
+          <div class="card-label">最多保留天数</div>
+          <div class="card-actions">
+            <span class="hint">保留 <input id="logMaxDays" class="num" type="number" min="0" step="1"> 天</span>
+          </div>
+        </div>
+      </div>
+      <div class="row-actions">
+        <button class="btn primary" id="applyLogLimitsBtn">应用并立即清理</button>
+      </div>
     </div>
   </section>
 

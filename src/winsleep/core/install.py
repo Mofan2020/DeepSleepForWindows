@@ -35,6 +35,7 @@ log = logging.getLogger("winsleep.install")
 DAEMON_TASK = "DeepSleepForWindows-Daemon"
 AGENT_TASK = "DeepSleepForWindows-Agent"
 SCHEDULE_TASK = "DeepSleepForWindows-Schedule"
+TRAY_TASK = "DeepSleepForWindows-Tray"
 
 
 def _decode(raw: bytes) -> str:
@@ -148,6 +149,45 @@ def install_agent_task() -> tuple[bool, str]:
     return True, AGENT_TASK
 
 
+def install_tray_task() -> tuple[bool, str]:
+    """Create the task that starts the program at every logon.
+
+    The task runs in the interactive session, because the icon in the
+    notification area needs a desktop to live on.  It is a separate
+    task from the daemon, so the daemon keeps working even when the
+    window is not there.
+    """
+    command = _module_args("tray")
+    args = [
+        "schtasks",
+        "/Create",
+        "/TN",
+        TRAY_TASK,
+        "/TR",
+        command,
+        "/SC",
+        "ONLOGON",
+        "/IT",
+        "/F",
+    ]
+    result = _run(args)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        return False, detail or "schtasks failed"
+    return True, TRAY_TASK
+
+
+def start_tray() -> tuple[bool, str]:
+    """Start the notification area icon right now."""
+    if not task_exists(TRAY_TASK):
+        return False, "the tray task is not installed yet"
+    result = _run(["schtasks", "/Run", "/TN", TRAY_TASK])
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        return False, detail or "the tray did not start"
+    return True, "the tray was started"
+
+
 def start_agent() -> tuple[bool, str]:
     """Start the agent task right now."""
     result = _run(["schtasks", "/Run", "/TN", AGENT_TASK])
@@ -220,20 +260,34 @@ def task_exists(name: str) -> bool:
 
 
 def install_all() -> tuple[bool, str]:
-    """Register both tasks."""
+    """Register the tasks.
+
+    The tray task is the one that may fail: an interactive task needs
+    the password of the user when it is created from a command line,
+    and some machines refuse it.  The other two are what the program
+    really needs, so a failure of the tray does not fail the whole
+    installation.
+    """
     ok, detail = install_daemon_task()
     if not ok:
         return False, detail
     ok, detail = install_agent_task()
     if not ok:
         return False, detail
-    return True, "the tasks were registered"
+
+    messages = ["the tasks were registered"]
+    tray_ok, tray_detail = install_tray_task()
+    if tray_ok:
+        messages.append(f"{TRAY_TASK} was registered")
+    else:
+        messages.append(f"开机自启没有装上：{tray_detail}")
+    return True, ", ".join(messages)
 
 
 def uninstall_all() -> tuple[bool, str]:
     """Remove both tasks and stop whatever they started."""
     messages = []
-    for name in (DAEMON_TASK, AGENT_TASK):
+    for name in (DAEMON_TASK, AGENT_TASK, TRAY_TASK):
         if task_exists(name):
             stop_task(name)
             remove_task(name)
@@ -241,7 +295,7 @@ def uninstall_all() -> tuple[bool, str]:
 
     # The processes are stopped as well.  Removing the task does not
     # stop a process that is already running.
-    for command in ("daemon", "agent"):
+    for command in ("daemon", "agent", "tray"):
         killed = kill_processes(command)
         if killed:
             messages.append(f"{killed} {command} process(es) were stopped")
@@ -354,6 +408,11 @@ def service_installed() -> bool:
     return task_exists(DAEMON_TASK)
 
 
+def tray_installed() -> bool:
+    """True when the task that starts the program at logon is there."""
+    return task_exists(TRAY_TASK)
+
+
 def start_daemon() -> tuple[bool, str]:
     """Start the daemon task right now."""
     if not task_exists(DAEMON_TASK):
@@ -400,6 +459,7 @@ def service_status() -> dict[str, object]:
         "installed": service_installed(),
         "running": daemon_running(),
         "agent_running": agent_running(),
+        "tray_installed": tray_installed(),
     }
 
 

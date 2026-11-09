@@ -92,6 +92,72 @@ MUTATIONS: list[tuple[str, Path, str, str]] = [
         if True:""",
     ),
     (
+        "the log is trimmed but the removed lines are kept",
+        SRC / "core" / "logs.py",
+        """    after = len(kept)
+    if after == before:""",
+        """    after = before
+    if True:""",
+    ),
+    (
+        "the log is never trimmed",
+        SRC / "core" / "logs.py",
+        """    if max_lines > 0 and len(kept) > max_lines:
+        kept = kept[-max_lines:]""",
+        """    if False:
+        kept = kept[-max_lines:]""",
+    ),
+    (
+        "the log tailer gives the same lines again",
+        SRC / "core" / "logs.py",
+        """                text = handle.read()
+                self._offset = handle.tell()""",
+        """                text = handle.read()
+                self._offset = self._offset""",
+    ),
+    (
+        "the log is not cleared",
+        SRC / "core" / "logs.py",
+        """    before = len(read_log(path))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)""",
+        """    before = 0
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)""",
+    ),
+    (
+        "the elevation passes the executable twice",
+        SRC / "core" / "elevate.py",
+        """    parts = [_quote(program)]
+    parts.extend(_quote(part) for part in source[1:])""",
+        """    parts = [_quote(program)]
+    parts.extend(_quote(part) for part in source)""",
+    ),
+    (
+        "the elevation asks for administrator rights forever",
+        SRC / "core" / "elevate.py",
+        """    if ELEVATION_MARKER in source:
+        return source""",
+        """    if False:
+        return source""",
+    ),
+    (
+        "a plan the user made is restored as well",
+        SRC / "core" / "planrestore.py",
+        """    return guid.strip().lower() in BUILT_IN_PLANS""",
+        """    return True""",
+    ),
+    (
+        "the single instance lock is given to everybody",
+        SRC / "core" / "single.py",
+        """        except FileExistsError:
+            if not self._stale():
+                return""",
+        """        except FileExistsError:
+            if False:
+                return""",
+    ),
+    (
         "the daemon does not count a failed switch",
         SRC / "core" / "daemon.py",
         "        self._plan_failures += 1\n",

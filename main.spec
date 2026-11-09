@@ -48,10 +48,21 @@ a = Analysis(
     datas=[
         (str(PROJECT_ROOT / "src" / "winsleep" / "gui" / "assets"),
          "winsleep/gui/assets"),
+        # The icon of the notification area.  Without it the tray has
+        # to draw one, which works but looks worse.
+        (str(PROJECT_ROOT / "assets" / "icon.png"),
+         "winsleep/gui/assets"),
     ],
     hiddenimports=_webview_modules() + [
         "winsleep.core.winapi",
         "psutil",
+        # The notification area icon.  pystray picks its backend at
+        # runtime, so the modules are never imported by the code that
+        # PyInstaller can see.
+        "pystray",
+        "pystray._win32",
+        "PIL.Image",
+        "PIL.ImageDraw",
     ],
     hookspath=[],
     hooksconfig={},
@@ -68,7 +79,12 @@ a = Analysis(
         "tkinter",
         "matplotlib",
         "numpy",
-        "PIL",
+        # Pillow must NOT be excluded here.  The tray icon is drawn
+        # with PIL.Image, and an exclude beats a hidden import - the
+        # build then says "Hidden import 'PIL.Image' not found" and the
+        # frozen program has no way to draw the icon.  Pillow only
+        # pulls in a couple of megabytes, which is cheaper than a
+        # broken tray.
     ],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,

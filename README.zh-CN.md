@@ -7,7 +7,7 @@
 ![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 ![Release](https://img.shields.io/badge/release/Mofan2020/DeepSleepForWindows)
 
-- **版本**：0.2.0
+- **版本**：0.3.0
 - **语言**：Python 3.11+，pywebview
 - **协议**：MIT
 
@@ -24,8 +24,12 @@ DeepSleep For Windows 替你做这件事，还允许你在这基础上写自己�
 - **服务器模式** —— 持续防睡眠，空闲一段时间后自动锁屏。
 - **自动化规则** —— 把空闲时长、CPU 占用、进程是否运行、时间段、星期几组合起来，全部成立时执行动作。
 - **后台常驻** —— 两个计划任务，一个跑守护进程，一个跑在用户会话里，随时关窗口都不影响。装、启、停都能在窗口里点。
-- **自己的电源计划** —— 复制一个计划，改它里面的内容：多久关显示、多久睡觉、多久休眠、处理器最低降到多少。
+- **自己的电源计划** —— 复制一个计划，改它里面的内容：多久关显示、多久睡觉、多久休眠、处理器最低降到多少。内置计划还能一键恢复到 Windows 出厂时的设置。
+- **两套现成的计划** —— 「DSForWin 最节能」和「DSForWin 最高性能」，从「平衡」复制一份再改出来，需要的时候一键创建。
+- **显卡专项省电** —— 把显卡偏好设成省电或最高性能，顺便看驱动报上来的负载。
 - **要窗口的话也有** —— 一个 pywebview 小界面，看状态、改设置、管规则。
+- **实时看日志** —— 日志边写边看，按行数或按天数裁剪，也能直接清空。
+- **不碍事** —— 通知区域常驻一个小图标，程序同时只跑一个。
 
 ## 工作原理
 
@@ -50,7 +54,7 @@ agent 是唯一和 Win32 API 打交道的地方。规则引擎、配置存储、
 DeepSleepForWindows.exe install
 ```
 
-这会注册两个计划任务。守护进程在登录时启动，agent 跑在你自己的会话里，所以它能读到真实的空闲时间。
+这会注册两个计划任务。守护进程在登录时启动，agent 跑在你自己的会话里，所以它能读到真实的空闲时间。通知区域的托盘图标是第三个任务，机器允许才注册 —— 就算它被拒绝也不影响安装，守护进程和 agent 才是要紧的。
 
 打开窗口：双击那个 exe，或者：
 
@@ -66,14 +70,20 @@ DeepSleepForWindows.exe uninstall
 
 程序没有控制台窗口，双击运行不会弹黑框。出问题时会弹一个对话框，写着失败原因和日志文件的位置。
 
+双击会向 Windows 要管理员权限 —— 改电源计划、恢复默认设置都需要。如果你在 UAC 上点「否」，程序照常运行，只是那部分做不了，原因写进日志。
+
 ## 命令行
 
 ```bat
 DeepSleepForWindows gui                  打开窗口
+DeepSleepForWindows tray                 只在通知区域常驻，不开窗口
 DeepSleepForWindows status               以 JSON 打印当前状态
 DeepSleepForWindows plans                列出所有电源计划
 DeepSleepForWindows switch "平衡"        立刻切换电源计划
 DeepSleepForWindows lock                 立刻锁屏
+DeepSleepForWindows sleep [--hibernate]  立刻让机器睡觉
+DeepSleepForWindows doctor               检查装得对不对
+DeepSleepForWindows selftest             检查打包文件完整
 DeepSleepForWindows install              注册计划任务
 DeepSleepForWindows uninstall            移除计划任务
 ```
@@ -94,9 +104,13 @@ DeepSleepForWindows uninstall            移除计划任务
   "server_lock_seconds": 300,
   "keep_awake": false,
   "rules": [],
+  "log_max_lines": 0,
+  "log_max_age_days": 0.0,
   "last_plan_guid": ""
 }
 ```
+
+`log_max_lines` 和 `log_max_age_days` 用来自动裁剪日志。两个都是 `0` 表示不管。
 
 ### 规则条件
 

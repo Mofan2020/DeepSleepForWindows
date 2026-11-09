@@ -38,6 +38,15 @@ const CONDITION_UNITS = {
 
 let state = { plans: [], plan_guids: [], config: {} };
 
+/* The live log view.  ``logOffset`` is the byte position in the log
+ * file that was read last time, so the Python side only has to send the
+ * lines that appeared since.  ``logLines`` holds what is on screen. */
+let logOffset = 0;
+let logLines = [];
+let logTimer = null;
+let logFollow = true;
+const LOG_MAX_ON_SCREEN = 2000;
+
 function formatIdle(seconds) {
   if (seconds === null || seconds === undefined || seconds < 0) return '--';
   const total = Math.floor(seconds);
@@ -594,6 +603,8 @@ async function refresh() {
   setIfIdle($('idleMinutes'), Math.round((config.idle_seconds ?? 600) / 60), active);
   setIfIdle($('idleCpu'), config.idle_cpu_percent ?? 15, active);
   setIfIdle($('serverLockMinutes'), Math.round((config.server_lock_seconds ?? 300) / 60), active);
+  setIfIdle($('logMaxLines'), config.log_max_lines ?? 0, active);
+  setIfIdle($('logMaxDays'), config.log_max_age_days ?? 0, active);
   $('cpuValue').textContent = `低于 ${config.idle_cpu_percent ?? 15}%`;
 
   $('serverToggle').checked = !!config.server_mode;
@@ -601,6 +612,8 @@ async function refresh() {
   $('keepAwakeToggle').checked = !!config.keep_awake;
   $('keepAwakeValue').textContent = config.keep_awake ? '开启' : '关闭';
 
+  renderOwnPlans();
+  renderGpu();
   renderRules(config.rules || []);
   renderGames(config.game_processes || []);
 
@@ -665,6 +678,14 @@ function wire() {
       }
       for (const page of document.querySelectorAll('.page')) {
         page.hidden = page.id !== `page-${tab.dataset.tab}`;
+      }
+      // The log is only read while its page is open.  Nobody is
+      // looking at it otherwise, so there is no reason to keep asking
+      // for it.
+      if (tab.dataset.tab === 'logs') {
+        startLogWatch();
+      } else {
+        stopLogWatch();
       }
     });
   }
@@ -748,8 +769,37 @@ function wire() {
   });
 
   $('openLogBtn').addEventListener('click', async () => {
-    const result = await api().open_log();
-    $('logView').textContent = (result.lines || []).join('\n');
+    await reloadLog();
+  });
+
+  $('logFollowToggle').addEventListener('change', (event) => {
+    logFollow = event.target.checked;
+    if (logFollow) {
+      const view = $('logView');
+      view.scrollTop = view.scrollHeight;
+    }
+  });
+
+  $('clearLogBtn').addEventListener('click', async () => {
+    if (!window.confirm('确定要清空日志吗？清空后无法恢复。')) return;
+    const result = await api().clear_log();
+    $('logHint').textContent = result.message || (result.ok ? '已清空' : '清除失败');
+    $('logHint').className = result.ok ? 'hint ok' : 'hint bad';
+    logOffset = 0;
+    logLines = [];
+    $('logView').textContent = '';
+  });
+
+  $('applyLogLimitsBtn').addEventListener('click', async () => {
+    const lines = parseInt($('logMaxLines').value, 10) || 0;
+    const days = parseFloat($('logMaxDays').value) || 0;
+    await api().save_config({ log_max_lines: lines, log_max_age_days: days });
+    const result = await api().trim_log(lines, days);
+    $('logHint').textContent = result.ok
+      ? `清理完成，删掉 ${result.removed} 行`
+      : (result.message || '清理失败');
+    $('logHint').className = result.ok ? 'hint ok' : 'hint bad';
+    await reloadLog();
   });
 
   $('editPlanSelect').addEventListener('change', async (event) => {
@@ -778,6 +828,30 @@ function wire() {
     $('planSaveHint').textContent = result.ok ? '删掉了' : (result.message || '删除失败');
     $('planSaveHint').className = result.ok ? 'hint ok' : 'hint bad';
     await refresh();
+  });
+
+  $('restorePlanBtn').addEventListener('click', async () => {
+    const guid = guidOfPlan($('editPlanSelect').value);
+    if (!guid) return;
+    if (!window.confirm('把这个计划恢复成 Windows 默认的设置？')) return;
+    const result = await api().restore_plan(guid);
+    $('planSaveHint').textContent = result.ok ? '恢复好了' : (result.message || '恢复失败');
+    $('planSaveHint').className = result.ok ? 'hint ok' : 'hint bad';
+    await renderPlanSettings(guid);
+  });
+
+  $('gpuApplyBtn').addEventListener('click', async () => {
+    const choice = $('gpuPreference').value;
+    const result = await api().set_gpu_preference(choice);
+    if (!result.supported) {
+      $('gpuHint').textContent = result.message || '这台机器不支持这一项';
+      $('gpuHint').className = 'hint bad';
+      return;
+    }
+    $('gpuHint').textContent = result.applied
+      ? ('已设置：' + result.preference + '。显卡是否真的进入低功耗由驱动决定。')
+      : (result.message || '设置失败');
+    $('gpuHint').className = result.applied ? 'hint ok' : 'hint bad';
   });
 
   $('savePlanBtn').addEventListener('click', async () => {
@@ -844,6 +918,109 @@ function wire() {
 
   buildConditionValue();
   buildActionValue();
+}
+
+/* --------------------------------------------------- the own power plans */
+
+async function renderOwnPlans() {
+  const area = $('ownPlanList');
+  if (!area) return;
+  const result = await api().own_plans();
+  const plans = (result && result.plans) || [];
+  area.innerHTML = '';
+  for (const plan of plans) {
+    const card = document.createElement('div');
+    card.className = 'card glass';
+    const label = document.createElement('div');
+    label.className = 'card-label';
+    label.textContent = plan.name;
+    const note = document.createElement('div');
+    note.className = 'card-value';
+    note.textContent = plan.description || '';
+    const actions = document.createElement('div');
+    actions.className = 'card-actions';
+    const button = document.createElement('button');
+    button.className = 'btn';
+    button.textContent = '创建';
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      const made = await api().create_own_plan(plan.key);
+      button.disabled = false;
+      $('planSaveHint').textContent = made.ok ? '做好了，已经切成它' : (made.message || '创建失败');
+      $('planSaveHint').className = made.ok ? 'hint ok' : 'hint bad';
+      await refresh();
+    });
+    actions.appendChild(button);
+    card.appendChild(label);
+    card.appendChild(note);
+    card.appendChild(actions);
+    area.appendChild(card);
+  }
+}
+
+/* --------------------------------------------------------- the graphics card */
+
+async function renderGpu() {
+  const select = $('gpuPreference');
+  const hint = $('gpuHint');
+  if (!select) return;
+  const result = await api().gpu_state();
+  if (!result.supported) {
+    select.innerHTML = '';
+    select.disabled = true;
+    $('gpuApplyBtn').disabled = true;
+    hint.textContent = result.message || '这台机器不支持这一项';
+    hint.className = 'hint bad';
+    return;
+  }
+  select.disabled = false;
+  $('gpuApplyBtn').disabled = false;
+  if (select.options.length === 0) {
+    select.appendChild(makeOption('saver', '省电'));
+    select.appendChild(makeOption('performance', '最高性能'));
+  }
+  const load = result.utilisation >= 0 ? ('，当前负载 ' + result.utilisation + '%') : '';
+  hint.textContent = '当前：' + (result.preference || '跟随系统') + load;
+  hint.className = 'hint';
+}
+
+/* ------------------------------------------------------------ the log */
+
+function startLogWatch() {
+  if (logTimer !== null) return;
+  reloadLog();
+  logTimer = setInterval(pollLog, 1000);
+}
+
+function stopLogWatch() {
+  if (logTimer === null) return;
+  clearInterval(logTimer);
+  logTimer = null;
+}
+
+async function reloadLog() {
+  logOffset = 0;
+  logLines = [];
+  const view = $('logView');
+  if (view) view.textContent = '';
+  await pollLog();
+}
+
+async function pollLog() {
+  const result = await api().log_tail(logOffset);
+  if (!result || !result.ok) return;
+  logOffset = result.offset;
+  const fresh = result.lines || [];
+  if (fresh.length === 0) return;
+  logLines = logLines.concat(fresh);
+  if (logLines.length > LOG_MAX_ON_SCREEN) {
+    logLines = logLines.slice(logLines.length - LOG_MAX_ON_SCREEN);
+  }
+  const view = $('logView');
+  view.textContent = logLines.join('\n');
+  if (logFollow) {
+    view.scrollTop = view.scrollHeight;
+  }
 }
 
 window.addEventListener('pywebviewready', () => {
