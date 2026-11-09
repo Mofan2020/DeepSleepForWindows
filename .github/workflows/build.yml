@@ -48,6 +48,25 @@ jobs:
       - name: Unit tests
         run: pytest -q
 
+      # A tag that does not match the version in the code publishes an
+      # executable that calls itself something else.  The check runs on
+      # every push, so the mistake is caught before the tag is made.
+      - name: The version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          CODE_VERSION=$(python -c "import re,pathlib;print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('src/winsleep/version.py').read_text()).group(1))")
+          PACKAGE_VERSION=$(python -c "import re,pathlib;print(re.search(r'^version = \"([^\"]+)\"', pathlib.Path('pyproject.toml').read_text(), re.M).group(1))")
+          if [ "$TAG_VERSION" != "$CODE_VERSION" ]; then
+            echo "::error::the tag says $TAG_VERSION but the program says $CODE_VERSION"
+            exit 1
+          fi
+          if [ "$TAG_VERSION" != "$PACKAGE_VERSION" ]; then
+            echo "::error::the tag says $TAG_VERSION but pyproject.toml says $PACKAGE_VERSION"
+            exit 1
+          fi
+          echo "the tag, the program and the package all say $TAG_VERSION"
+
       # A green test suite means nothing if the tests would still be
       # green with the behaviour broken.  Every important piece of
       # logic is broken on purpose and the tests have to notice.
