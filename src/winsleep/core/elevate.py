@@ -18,7 +18,10 @@ argument is quoted.
 from __future__ import annotations
 
 import ctypes
+import logging
 import sys
+
+log = logging.getLogger("winsleep.elevate")
 
 __all__ = [
     "ELEVATION_MARKER",
@@ -85,18 +88,33 @@ def elevate(argv: list[str] | None = None) -> bool:
         return False
     try:
         executable = sys.executable
-        arguments = relaunch_arguments(argv)
+        # In a frozen build, sys.executable is the .exe path.
+        # We need to pass the marker so the elevated copy knows not to
+        # ask for elevation again.
+        marker = ELEVATION_MARKER
+        source = list(argv if argv is not None else sys.argv)
+        if marker not in source:
+            # Insert marker after the executable path
+            source = [source[0], marker] + source[1:]
+        arguments = " ".join(_quote(part) for part in source[1:])
+        log.info("elevating: executable=%s arguments=%s", executable, arguments)
         # SW_SHOWNORMAL = 1.  The window has to be visible, because
         # the user has to see it.
         result = ctypes.windll.shell32.ShellExecuteW(
             None, "runas", executable, arguments, None, 1
         )
-    except Exception:  # noqa: BLE001 - a refused prompt is not a crash
+    except Exception as exc:  # noqa: BLE001 - a refused prompt is not a crash
+        log.error("elevation failed: %s", exc)
         return False
     # ShellExecuteW returns a value above 32 when it worked.  Anything
     # below that is an error, and 5 is "access denied" - which is what
     # the user gets when they click "no" on the prompt.
-    return int(result) > 32
+    result_code = int(result)
+    if result_code <= 32:
+        log.error("elevation failed with code %d", result_code)
+        return False
+    log.info("elevation succeeded")
+    return True
 
 
 def elevate_and_exit(argv: list[str] | None = None) -> bool:
