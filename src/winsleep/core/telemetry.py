@@ -12,6 +12,7 @@ import logging
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 __all__ = [
     "disable_telemetry",
@@ -246,8 +247,8 @@ def _hosts_action(action: str, hosts: list[str]) -> tuple[bool, str]:
         marker_end = "# <<< DeepSleep Telemetry Block End <<<"
 
         if action == "block":
-            new_lines = [l for l in lines if marker_start not in l and marker_end not in l]
-            filtered = [l for l in new_lines if not any(h in l for h in _TELEMETRY_HOSTS)]
+            new_lines = [line for line in lines if marker_start not in line and marker_end not in line]
+            filtered = [line for line in new_lines if not any(h in line for h in _TELEMETRY_HOSTS)]
             filtered.append("# >>> DeepSleep Telemetry Block Start >>>")
             for h in hosts:
                 filtered.append(f"0.0.0.0 {h}")
@@ -257,15 +258,15 @@ def _hosts_action(action: str, hosts: list[str]) -> tuple[bool, str]:
         elif action == "unblock":
             new_lines = []
             in_block = False
-            for l in lines:
-                if "# >>> DeepSleep Telemetry Block Start >>>" in l:
+            for line in lines:
+                if "# >>> DeepSleep Telemetry Block Start >>>" in line:
                     in_block = True
                     continue
-                if "# <<< DeepSleep Telemetry Block End <<<" in l:
+                if "# <<< DeepSleep Telemetry Block End <<<" in line:
                     in_block = False
                     continue
                 if not in_block:
-                    new_lines.append(l)
+                    new_lines.append(line)
             hosts_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
             return True, "unblocked"
         return False, "unknown action"
