@@ -24,7 +24,7 @@ import os
 import sys
 
 from .core import config as config_mod
-from .core import paths, winapi, winpower, elevate
+from .core import paths, winapi, winpower
 from .version import APP_NAME, DISPLAY_NAME, __version__
 
 log = logging.getLogger("winsleep.cli")
@@ -182,8 +182,8 @@ def _open_window() -> int:
     """
     # If we are not admin, re-launch elevated so the window can
     # register tasks and change power plans.
-    if not is_admin():
-        if elevate_and_exit():
+    if not _is_admin():
+        if _elevate_and_exit(sys.argv):
             return 0
         # If elevation was refused, fall through and try anyway.
         log.info("elevation was refused; trying to open the window anyway")
