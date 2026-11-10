@@ -122,6 +122,11 @@ def run_tray(
         log.warning("the icon for the notification area could not be made")
         return 1
 
+    # Set tooltip so users know what it is when hovering over the
+    # hidden icons area.  Windows 11 hides tray icons by default in
+    # the overflow area; a tooltip helps users find it.
+    icon.title = "DeepSleep For Windows"
+
     # The icon is there now.  Saying so in the log is what tells the
     # user whether the icon is there or not - the notification area is
     # hidden behind the little arrow more often than not, and the
