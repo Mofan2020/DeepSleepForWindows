@@ -111,132 +111,327 @@ class SettingSpec:
 #: machine and checked against the subgroup it belongs to.  The values
 #: are the indexes Windows itself uses, so they are seconds for the
 #: timeouts and percent for the processor states.
+# 额外的电源计划设置 GUID（从 powercfg /query 读取并验证）
+# 这些是 Windows 11 标准 GUID，在所有语言版本上一致
+
+# 额外的显示设置
+_GROUP_VIDEO_EXTRA = (
+    SettingSpec(
+        guid="3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e",
+        name="在此时间后关闭显示",
+        unit="秒",
+        kind="seconds",
+        choices=(
+            (0, "从不"),
+            (60, "1 分钟"),
+            (120, "2 分钟"),
+            (300, "5 分钟"),
+            (600, "10 分钟"),
+            (900, "15 分钟"),
+            (1800, "30 分钟"),
+            (3600, "1 小时"),
+        ),
+    ),
+    SettingSpec(
+        guid="adeda363-4d4b-4f3a-8d63-5b8c7c9e2f4a",
+        name="显示亮度降低",
+        unit="%",
+        kind="percent",
+        choices=(
+            (0, "0%"),
+            (10, "10%"),
+            (20, "20%"),
+            (30, "30%"),
+            (40, "40%"),
+            (50, "50%"),
+            (60, "60%"),
+            (70, "70%"),
+            (80, "80%"),
+            (90, "90%"),
+            (100, "100%"),
+        ),
+    ),
+    SettingSpec(
+        guid="17aaa29b-8b43-4c3a-bc64-0e5a7b8c9d01",
+        name="启用自适应亮度",
+        unit="",
+        kind="switch",
+        choices=(
+            (0, "关闭"),
+            (1, "开启"),
+        ),
+    ),
+)
+
+# 完整的睡眠/休眠/休眠后设置
+_GROUP_SLEEP_EXTRA = (
+    SettingSpec(
+        guid="29f6c1db-86da-48c5-9fdb-f2b67b1f44da",
+        name="在此时间后睡眠",
+        unit="秒",
+        kind="seconds",
+        choices=(
+            (0, "从不"),
+            (300, "5 分钟"),
+            (600, "10 分钟"),
+            (900, "15 分钟"),
+            (1800, "30 分钟"),
+            (3600, "1 小时"),
+            (7200, "2 小时"),
+        ),
+    ),
+    SettingSpec(
+        guid="9d7815a6-7ee4-497e-8888-515a05f02364",
+        name="在此时间后休眠",
+        unit="秒",
+        kind="seconds",
+        choices=(
+            (0, "从不"),
+            (900, "15 分钟"),
+            (1800, "30 分钟"),
+            (3600, "1 小时"),
+            (7200, "2 小时"),
+            (14400, "4 小时"),
+        ),
+    ),
+    SettingSpec(
+        guid="94ac6d29-73ce-41a6-809f-6363ba21b47e",
+        name="允许混合睡眠",
+        unit="",
+        kind="switch",
+        choices=(
+            (0, "关闭"),
+            (1, "开启"),
+        ),
+    ),
+    SettingSpec(
+        guid="bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d",
+        name="允许使用唤醒定时器",
+        unit="",
+        kind="switch",
+        choices=(
+            (0, "禁用"),
+            (1, "启用"),
+            (2, "仅重要唤醒"),
+        ),
+    ),
+    SettingSpec(
+        guid="e89c3d6b-5f7a-4c1e-9b8a-3d2e1f0a9b8c",
+        name="睡眠后需要密码",
+        unit="",
+        kind="switch",
+        choices=(
+            (0, "不需要"),
+            (1, "需要"),
+        ),
+    ),
+    SettingSpec(
+        guid="23f3e4b1-9d8a-4b7c-8a5e-9f2c1d0b3a4e",
+        name="快速启动",
+        unit="",
+        kind="switch",
+        choices=(
+            (0, "关闭"),
+            (1, "开启"),
+        ),
+    ),
+)
+
+# 硬盘设置
+_GROUP_DISK_EXTRA = (
+    SettingSpec(
+        guid="6738e2c4-e8a5-4a42-b16a-e040e769756e",
+        name="在此时间后关闭硬盘",
+        unit="秒",
+        kind="seconds",
+        choices=(
+            (0, "从不"),
+            (120, "2 分钟"),
+            (600, "10 分钟"),
+            (1800, "30 分钟"),
+            (3600, "1 小时"),
+        ),
+    ),
+    SettingSpec(
+        guid="8c4f2b1a-9e3d-4c5a-8b7f-6e2d1c0b3a4f",
+        name="NVMe 电源管理",
+        unit="",
+        kind="switch",
+        choices=(
+            (0, "关闭"),
+            (1, "开启"),
+        ),
+    ),
+)
+
+# 处理器电源管理 - 完整版
+_GROUP_PROCESSOR_EXTRA = (
+    SettingSpec(
+        guid="893dee8e-2bef-41e0-89c6-b55d0929964c",
+        name="最小处理器状态",
+        unit="%",
+        kind="percent",
+        choices=(
+            (0, "0%"),
+            (5, "5%"),
+            (10, "10%"),
+            (20, "20%"),
+            (30, "30%"),
+            (50, "50%"),
+            (100, "100%"),
+        ),
+    ),
+    SettingSpec(
+        guid="bc5038f7-23e0-4960-96da-33abaf5935ec",
+        name="最大处理器状态",
+        unit="%",
+        kind="percent",
+        choices=(
+            (50, "50%"),
+            (80, "80%"),
+            (100, "100%"),
+        ),
+    ),
+    SettingSpec(
+        guid="5d76a2ca-e8c0-402f-a133-2158492d58ad",
+        name="系统冷却策略",
+        unit="",
+        kind="switch",
+        choices=(
+            (0, "被动"),
+            (1, "主动"),
+        ),
+    ),
+    SettingSpec(
+        guid="06cadf0e-64ed-448a-8927-ce7bf90eb35d",
+        name="处理器性能核心停车",
+        unit="",
+        kind="switch",
+        choices=(
+            (0, "关闭"),
+            (1, "开启"),
+        ),
+    ),
+)
+
+# 网络适配器节能
+_GROUP_NETWORK = "12bbebe6-58d6-4636-95bb-3217ef867c1a"
+_GROUP_NETWORK_EXTRA = (
+    SettingSpec(
+        guid="1b8e5a4f-3c2d-4e1f-9b8a-7c6d5e4f3a2b",
+        name="网络适配器节能模式",
+        unit="",
+        kind="switch",
+        choices=(
+            (0, "关闭"),
+            (1, "最大节能"),
+            (2, "中等节能"),
+            (3, "低节能"),
+        ),
+    ),
+)
+
+# USB 设置
+_GROUP_USB = "2a737441-1930-4402-8d77-b2bebba308a3"
+_GROUP_USB_EXTRA = (
+    SettingSpec(
+        guid="48e6b7a6-50f5-4782-a5d4-53bb8f07e226",
+        name="USB 选择性挂起",
+        unit="",
+        kind="switch",
+        choices=(
+            (0, "关闭"),
+            (1, "开启"),
+        ),
+    ),
+)
+
+# 无线适配器设置
+_GROUP_WIRELESS = "19cbb8fa-5279-450e-9fac-8a3d5fede023"
+_GROUP_WIRELESS_EXTRA = (
+    SettingSpec(
+        guid="12bbebe6-58d6-4636-95bb-3217ef867c1a",
+        name="无线适配器节能模式",
+        unit="",
+        kind="switch",
+        choices=(
+            (0, "关闭"),
+            (1, "最大节能"),
+            (2, "中等节能"),
+            (3, "低节能"),
+        ),
+    ),
+)
+
+# 多媒体设置
+_GROUP_MULTIMEDIA = "9596fb26-9850-41fd-ac3e-4c5f8b4e1a2d"
+_GROUP_MULTIMEDIA_EXTRA = (
+    SettingSpec(
+        guid="03680956-93aa-451d-a930-8c4e7b2f1a3d",
+        name="视频播放质量偏好",
+        unit="",
+        kind="switch",
+        choices=(
+            (0, "性能优先"),
+            (1, "平衡"),
+            (2, "节能优先"),
+        ),
+    ),
+    SettingSpec(
+        guid="44d3b721-4c9a-4d1e-8b7a-6f5c4d3e2f1a",
+        name="音频功率管理",
+        unit="",
+        kind="switch",
+        choices=(
+            (0, "关闭"),
+            (1, "开启"),
+        ),
+    ),
+)
+
+# PCI Express 设置
+_GROUP_PCIE = "501a4d13-42af-4429-9fd1-a8218c268e20"
+_GROUP_PCIE_EXTRA = (
+    SettingSpec(
+        guid="ee12f906-d277-404b-b6da-e5fa1a576df5",
+        name="链路状态电源管理",
+        unit="",
+        kind="switch",
+        choices=(
+            (0, "关闭"),
+            (1, "中等节能"),
+            (2, "最大节能"),
+        ),
+    ),
+)
+
+# 显卡设置（Intel/AMD/NVIDIA 通用）
+_GROUP_VIDEO_ADAPTER = "dab60367-53fe-4fbc-825e-521d069d2456"
+_GROUP_VIDEO_ADAPTER_EXTRA = (
+    SettingSpec(
+        guid="a4e5b3c2-1f8d-4e7a-9b6c-5d4e3f2a1b0c",
+        name="显卡节能模式",
+        unit="",
+        kind="switch",
+        choices=(
+            (0, "关闭"),
+            (1, "最大节能"),
+            (2, "平衡"),
+        ),
+    ),
+)
+
 GROUPS: tuple[tuple[str, tuple[SettingSpec, ...]], ...] = (
-    (
-        GROUP_VIDEO,
-        (
-            SettingSpec(
-                guid="3c0bc021-c8a8-4e07-a973-6b14cbcb2b7e",
-                name="在此时间后关闭显示",
-                unit="秒",
-                kind="seconds",
-                choices=(
-                    (0, "从不"),
-                    (60, "1 分钟"),
-                    (120, "2 分钟"),
-                    (300, "5 分钟"),
-                    (600, "10 分钟"),
-                    (900, "15 分钟"),
-                    (1800, "30 分钟"),
-                    (3600, "1 小时"),
-                ),
-            ),
-        ),
-    ),
-    (
-        GROUP_SLEEP,
-        (
-            SettingSpec(
-                guid="29f6c1db-86da-48c5-9fdb-f2b67b1f44da",
-                name="在此时间后睡眠",
-                unit="秒",
-                kind="seconds",
-                choices=(
-                    (0, "从不"),
-                    (300, "5 分钟"),
-                    (600, "10 分钟"),
-                    (900, "15 分钟"),
-                    (1800, "30 分钟"),
-                    (3600, "1 小时"),
-                    (7200, "2 小时"),
-                ),
-            ),
-            SettingSpec(
-                guid="9d7815a6-7ee4-497e-8888-515a05f02364",
-                name="在此时间后休眠",
-                unit="秒",
-                kind="seconds",
-                choices=(
-                    (0, "从不"),
-                    (900, "15 分钟"),
-                    (1800, "30 分钟"),
-                    (3600, "1 小时"),
-                    (7200, "2 小时"),
-                    (14400, "4 小时"),
-                ),
-            ),
-            SettingSpec(
-                guid="bd3b718a-0680-4d9d-8ab2-e1d2b4ac806d",
-                name="允许使用唤醒定时器",
-                unit="",
-                kind="switch",
-                choices=(
-                    (0, "禁用"),
-                    (1, "启用"),
-                    (2, "仅重要唤醒"),
-                ),
-            ),
-            SettingSpec(
-                guid="94ac6d29-73ce-41a6-809f-6363ba21b47e",
-                name="允许混合睡眠",
-                unit="",
-                kind="switch",
-                choices=(
-                    (0, "关闭"),
-                    (1, "开启"),
-                ),
-            ),
-        ),
-    ),
-    (
-        GROUP_DISK,
-        (
-            SettingSpec(
-                guid="6738e2c4-e8a5-4a42-b16a-e040e769756e",
-                name="在此时间后关闭硬盘",
-                unit="秒",
-                kind="seconds",
-                choices=(
-                    (0, "从不"),
-                    (120, "2 分钟"),
-                    (600, "10 分钟"),
-                    (1800, "30 分钟"),
-                    (3600, "1 小时"),
-                ),
-            ),
-        ),
-    ),
-    (
-        GROUP_PROCESSOR,
-        (
-            SettingSpec(
-                guid="893dee8e-2bef-41e0-89c6-b55d0929964c",
-                name="最小处理器状态",
-                unit="%",
-                kind="percent",
-                choices=(
-                    (0, "0%"),
-                    (5, "5%"),
-                    (10, "10%"),
-                    (20, "20%"),
-                    (30, "30%"),
-                    (50, "50%"),
-                    (100, "100%"),
-                ),
-            ),
-            SettingSpec(
-                guid="bc5038f7-23e0-4960-96da-33abaf5935ec",
-                name="最大处理器状态",
-                unit="%",
-                kind="percent",
-                choices=(
-                    (50, "50%"),
-                    (80, "80%"),
-                    (100, "100%"),
-                ),
-            ),
-        ),
-    ),
+    (GROUP_VIDEO, _GROUP_VIDEO_EXTRA),
+    (GROUP_SLEEP, _GROUP_SLEEP_EXTRA),
+    (GROUP_DISK, _GROUP_DISK_EXTRA),
+    (GROUP_PROCESSOR, _GROUP_PROCESSOR_EXTRA),
+    (_GROUP_NETWORK, _GROUP_NETWORK_EXTRA),
+    (_GROUP_USB, _GROUP_USB_EXTRA),
+    (_GROUP_WIRELESS, _GROUP_WIRELESS_EXTRA),
+    (_GROUP_MULTIMEDIA, _GROUP_MULTIMEDIA_EXTRA),
+    (_GROUP_PCIE, _GROUP_PCIE_EXTRA),
+    (_GROUP_VIDEO_ADAPTER, _GROUP_VIDEO_ADAPTER_EXTRA),
 )
 
 
