@@ -24,7 +24,7 @@ import os
 import sys
 
 from .core import config as config_mod
-from .core import paths, winapi, winpower, telemetry
+from .core import paths, winapi, winpower
 from .version import APP_NAME, DISPLAY_NAME, __version__
 
 log = logging.getLogger("winsleep.cli")
@@ -581,8 +581,9 @@ def _cmd_telemetry_enable(_args: argparse.Namespace) -> int:
 
 
 def _cmd_telemetry_status(_args: argparse.Namespace) -> int:
-    from .core import telemetry
     import json
+
+    from .core import telemetry
     result = telemetry.telemetry_status()
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if result.get("ok") else 1
@@ -628,8 +629,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("lock", help="lock the screen").set_defaults(func=_cmd_lock)
 
-    telemetry = sub.add_parser("telemetry", help="manage Microsoft telemetry")
-    telemetry_sub = telemetry.add_subparsers(dest="telemetry_cmd")
+    telemetry_parser = sub.add_parser("telemetry", help="manage Microsoft telemetry")
+    telemetry_sub = telemetry_parser.add_subparsers(dest="telemetry_cmd")
     telemetry_sub.add_parser("disable", help="disable Microsoft telemetry").set_defaults(func=_cmd_telemetry_disable)
     telemetry_sub.add_parser("enable", help="restore Microsoft telemetry").set_defaults(func=_cmd_telemetry_enable)
     telemetry_sub.add_parser("status", help="show telemetry status").set_defaults(func=_cmd_telemetry_status)
