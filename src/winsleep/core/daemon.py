@@ -305,6 +305,17 @@ class Daemon:
     # -- lifecycle -------------------------------------------------------
 
     def run_forever(self) -> None:
+        # The lock file is only for the GUI to prevent multiple windows.
+        # The daemon runs in session 0 and doesn't need it, so clean it up.
+        try:
+            from . import single
+            lock = single.lock_path()
+            if lock.exists():
+                lock.unlink()
+                log.info("removed stale window lock file")
+        except Exception:  # noqa: BLE001 - lock file is best effort
+            pass
+
         port = self._server.start()
         self._write_port(port)
         log.info("the daemon is listening on 127.0.0.1:%d", port)

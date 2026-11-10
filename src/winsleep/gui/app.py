@@ -8,6 +8,7 @@ and the interface is only a way to look at it and change the settings.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -79,6 +80,19 @@ def run() -> int:
         raise RuntimeError(
             "the window needs pywebview, which is not part of this build"
         ) from exc
+
+    # Set WebView2 user data folder BEFORE creating the window.
+    # This prevents error 0x80070578 (E_INVALIDARG) when the default
+    # location cannot be used.
+    # Use environment variable which is read by WebView2 loader directly.
+    try:
+        from ..core import paths
+        webview2_dir = paths.app_dir() / "webview2"
+        webview2_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["WEBVIEW2_USER_DATA_FOLDER"] = str(webview2_dir)
+        webview.settings["WEBVIEW2_USER_DATA_FOLDER"] = str(webview2_dir)
+    except Exception:
+        pass
 
     assets = _assets_dir()
     if not assets.is_dir():

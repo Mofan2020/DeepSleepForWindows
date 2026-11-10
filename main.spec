@@ -41,10 +41,19 @@ def _webview_modules():
     # through; it is loaded by name at runtime as well.
     return sorted(set(modules) | {"webview", "clr"})
 
+import os
+
+# Conda environment - need to include its Library/bin DLLs
+conda_bin = Path(r"D:\skyc8266\dev\env\anaconda3\Library\bin")
+conda_binaries = []
+if conda_bin.exists():
+    for dll in conda_bin.glob("*.dll"):
+        conda_binaries.append((str(dll), "."))
+
 a = Analysis(
     ["src/winsleep/__main__.py"],
     pathex=[str(PROJECT_ROOT / "src")],
-    binaries=[],
+    binaries=conda_binaries,
     datas=[
         (str(PROJECT_ROOT / "src" / "winsleep" / "gui" / "assets"),
          "winsleep/gui/assets"),

@@ -97,13 +97,13 @@ def elevate(argv: list[str] | None = None) -> bool:
             # Insert marker after the executable path
             source = [source[0], marker] + source[1:]
         arguments = " ".join(_quote(part) for part in source[1:])
-        # Quote the executable path if it contains spaces, as required by ShellExecuteW
-        quoted_executable = _quote(executable) if " " in executable else executable
         log.info("elevating: executable=%s arguments=%s", executable, arguments)
         # SW_SHOWNORMAL = 1.  The window has to be visible, because
         # the user has to see it.
+        # ShellExecuteW expects the executable path unquoted in lpFile.
+        # Only arguments need quoting.
         result = ctypes.windll.shell32.ShellExecuteW(
-            None, "runas", quoted_executable, arguments, None, 1
+            None, "runas", executable, arguments, None, 1
         )
     except Exception as exc:  # noqa: BLE001 - a refused prompt is not a crash
         log.error("elevation failed: %s", exc)
