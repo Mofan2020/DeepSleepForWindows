@@ -24,10 +24,82 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src" / "winsleep"
 
+#: Two runs at the same time write over each other's files.  Each one
+#: mutates source, runs the tests and puts the original back, and the
+#: second run's "original" is the first run's mutation.  The results
+#: are then about code that never existed: a snippet that "cannot be
+#: found", a mutation that "was not caught".  The lock makes the second
+#: run wait its turn instead.
+LOCK = ROOT / ".mutation-lock"
+
 #: Where the original code is kept while it is broken.  A run that is
 #: killed cannot put the code back itself, so the next run finds the
 #: original here and puts it back.
 JOURNAL = ROOT / ".mutation-journal.json"
+
+
+def take_lock() -> bool:
+    """Take the lock, or say that another run has it."""
+    import os
+    import time
+
+    try:
+        handle = os.open(LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        # A run that was killed leaves the lock behind.  The process
+        # that wrote it is asked whether it is still there.
+        try:
+            pid = int(LOCK.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            pid = 0
+        if pid and _process_alive(pid):
+            print(f"another mutation run is using the source tree (pid {pid}).")
+            print("wait for it to finish, or delete .mutation-lock if it is gone.")
+            return False
+        try:
+            LOCK.unlink()
+        except OSError:
+            return False
+        return take_lock()
+    except OSError as exc:
+        print(f"the lock could not be taken: {exc}")
+        return False
+
+    try:
+        os.write(handle, str(os.getpid()).encode("ascii"))
+        os.close(handle)
+    except OSError:
+        pass
+    # A lock that is an hour old belongs to nobody.
+    try:
+        os.utime(LOCK, (time.time(), time.time()))
+    except OSError:
+        pass
+    return True
+
+
+def drop_lock() -> None:
+    try:
+        LOCK.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _process_alive(pid: int) -> bool:
+    """True when a process with that number is running."""
+    try:
+        import psutil
+
+        return psutil.pid_exists(pid)
+    except ImportError:
+        pass
+    try:
+        import os
+
+        os.kill(pid, 0)
+    except (OSError, ValueError, AttributeError):
+        return False
+    return True
 
 
 def read_journal() -> dict[str, str]:
@@ -96,6 +168,7 @@ def put_back() -> None:
 def on_signal(signum, _frame):
     """Put the code back when the script is stopped."""
     put_back()
+    drop_lock()
     sys.exit(128 + signum)
 
 #: Every mutation is (name, file, original snippet, broken snippet).
@@ -444,6 +517,9 @@ def main() -> int:
             except (OSError, ValueError):
                 pass
 
+    if not take_lock():
+        return 3
+
     failures: list[str] = []
     survived: list[str] = []
 
@@ -493,6 +569,7 @@ def main() -> int:
         JOURNAL.unlink(missing_ok=True)
     except OSError:
         pass
+    drop_lock()
 
     print()
     print(f"{len(MUTATIONS) - len(survived)}/{len(MUTATIONS)} mutations caught")
