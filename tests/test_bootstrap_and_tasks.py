@@ -459,3 +459,26 @@ def test_a_task_that_is_not_on_the_machine_is_not_an_error(monkeypatch):
 
     monkeypatch.setattr(telemetry.subprocess, "run", lambda *a, **k: Done())
     assert telemetry._task_is_disabled("Missing-Task") is None
+
+
+def test_the_copy_happens_even_for_version(monkeypatch):
+    """``--version`` is answered by the argument parser, which exits.
+
+    Anything below ``parse_args`` never runs for it, so a copy made
+    there would be missing for exactly the commands that are used to
+    check the program - and the folder would quietly stay a version
+    behind.
+    """
+    from winsleep import cli
+    from winsleep.core import bootstrap
+
+    called = []
+    monkeypatch.setattr(bootstrap.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        bootstrap, "ensure_installed", lambda: called.append(True) or (True, "")
+    )
+
+    with pytest.raises(SystemExit):
+        cli.main(["--version"])
+
+    assert called == [True]

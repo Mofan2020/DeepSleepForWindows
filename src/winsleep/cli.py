@@ -810,6 +810,13 @@ def _keep_a_copy() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # The copy has to be in place whatever the command is.  ``--version``
+    # and ``--help`` make the argument parser exit from inside
+    # ``parse_args``, before anything after it runs - so a program that
+    # only copies itself for some commands leaves the folder a version
+    # behind for the others.
+    _keep_a_copy()
+
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -817,7 +824,6 @@ def main(argv: list[str] | None = None) -> int:
         # Started without a command - that is what happens when the
         # program is double clicked, so the window is what opens.
         _setup_logging(args.verbose)
-        _keep_a_copy()
         return _open_window()
 
     # A command was given, so the output goes to the shell that started
@@ -828,7 +834,6 @@ def main(argv: list[str] | None = None) -> int:
     # be able to encode them.
     _use_utf8_output()
     _setup_logging(args.verbose)
-    _keep_a_copy()
     return int(args.func(args))
 
 
