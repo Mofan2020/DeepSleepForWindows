@@ -74,6 +74,19 @@ def _ensure_admin() -> bool:
 
 def run() -> int:
     """Open the window.  Returns the process exit code."""
+
+    # Set WebView2 user data folder BEFORE importing webview.
+    # This prevents error 0x80070578 (E_INVALIDARG) when the default
+    # location cannot be used.  The env var must be set before webview
+    # is imported because WebView2 initializes its environment early.
+    try:
+        from ..core import paths
+        webview2_dir = paths.app_dir() / "webview2"
+        webview2_dir.mkdir(parents=True, exist_ok=True)
+        os.environ["WEBVIEW2_USER_DATA_FOLDER"] = str(webview2_dir)
+    except Exception:
+        pass
+
     try:
         import webview
     except ImportError as exc:
@@ -81,15 +94,8 @@ def run() -> int:
             "the window needs pywebview, which is not part of this build"
         ) from exc
 
-    # Set WebView2 user data folder BEFORE creating the window.
-    # This prevents error 0x80070578 (E_INVALIDARG) when the default
-    # location cannot be used.
-    # Use environment variable which is read by WebView2 loader directly.
+    # Also set in webview settings as fallback
     try:
-        from ..core import paths
-        webview2_dir = paths.app_dir() / "webview2"
-        webview2_dir.mkdir(parents=True, exist_ok=True)
-        os.environ["WEBVIEW2_USER_DATA_FOLDER"] = str(webview2_dir)
         webview.settings["WEBVIEW2_USER_DATA_FOLDER"] = str(webview2_dir)
     except Exception:
         pass
