@@ -48,6 +48,30 @@ def write_journal(data: dict[str, str]) -> None:
         pass
 
 
+def forget_bytecode(path: Path) -> None:
+    """Throw away the compiled copy of a file.
+
+    Python decides whether a ``.pyc`` is still good by comparing the
+    file's modification time - to the second - and its size.  A
+    mutation that swaps ``==`` for ``!=`` changes neither, so the
+    compiled copy of the broken code stays "valid" and every test after
+    the mutation runs against code that is not on disk any more.
+
+    That makes the whole run lie: the tests look green while being run
+    against code that no longer exists.  Deleting the compiled copy is
+    the only reliable way out.
+    """
+    cache = path.parent / "__pycache__"
+    if not cache.is_dir():
+        return
+    stem = path.stem
+    for compiled in cache.glob(f"{stem}.*.pyc"):
+        try:
+            compiled.unlink()
+        except OSError:
+            pass
+
+
 def put_back() -> None:
     """Put the original code back.
 
@@ -328,6 +352,76 @@ MUTATIONS: list[tuple[str, Path, str, str]] = [
         "            and one.lock_in == other.lock_in\n"
         "            and one.phase == other.phase",
     ),
+    # --- the copy of the program that the tasks point at -------------
+    (
+        "an older copy of the program is never replaced",
+        SRC / "core" / "bootstrap.py",
+        """    theirs = fingerprint(installed_exe()) if installed_exe().exists() else ""
+    if theirs == mine:""",
+        """    theirs = fingerprint(installed_exe()) if installed_exe().exists() else ""
+    if theirs or True:""",
+    ),
+    (
+        "the copy is made again even when it is already the same",
+        SRC / "core" / "bootstrap.py",
+        '    if theirs == mine:\n        # The file is there and it is the same one.',
+        '    if False:\n        # The file is there and it is the same one.',
+    ),
+    (
+        "a copy that was cut short is taken for a good one",
+        SRC / "core" / "bootstrap.py",
+        "    if written != mine:\n"
+        '        return False, "the copy does not match the program"',
+        "    if False:\n"
+        '        return False, "the copy does not match the program"',
+    ),
+    # --- the tasks that keep the background half alive ---------------
+    (
+        "a task is not started again when it stops",
+        SRC / "core" / "tasks.py",
+        '        f"    <RestartOnFailure>\\n"\n'
+        '        f"      <Interval>{RESTART_INTERVAL}</Interval>\\n"\n'
+        '        f"      <Count>{RESTART_COUNT}</Count>\\n"\n'
+        '        f"    </RestartOnFailure>\\n"\n',
+        "",
+    ),
+    (
+        "a task is killed after the default three days",
+        SRC / "core" / "tasks.py",
+        "<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>",
+        "<ExecutionTimeLimit>PT72H</ExecutionTimeLimit>",
+    ),
+    (
+        "a task stops when the laptop goes onto the battery",
+        SRC / "core" / "tasks.py",
+        "<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>",
+        "<StopIfGoingOnBatteries>true</StopIfGoingOnBatteries>",
+    ),
+    (
+        "the daemon is registered as a task of the logged on user",
+        SRC / "core" / "tasks.py",
+        """    if name == DAEMON_TASK:
+        return KIND_SYSTEM
+    return KIND_INTERACTIVE""",
+        """    if name == "never":
+        return KIND_SYSTEM
+    return KIND_INTERACTIVE""",
+    ),
+    (
+        "the tasks are registered but never started",
+        SRC / "core" / "install.py",
+        """    started_ok, started_detail = start_all()
+    messages.append(started_detail if started_ok else f"没能启动：{started_detail}")""",
+        """    started_ok, started_detail = True, "not started"
+    messages.append(started_detail)""",
+    ),
+    # --- reading the telemetry state without a language ---------------
+    (
+        "a task that is switched off is read as if it were running",
+        SRC / "core" / "telemetry.py",
+        '    return enabled.text.strip().lower() == "false"',
+        '    return enabled.text.strip().lower() != "false"',
+    ),
 ]
 
 
@@ -380,11 +474,13 @@ def main() -> int:
 
         try:
             path.write_text(source.replace(original, broken), encoding="utf-8")
+            forget_bytecode(path)
             result = run_tests()
         finally:
             # The original has to go back even when the tests were
             # killed half way through.
             path.write_text(source, encoding="utf-8")
+            forget_bytecode(path)
 
         if result.returncode == 0:
             survived.append(name)

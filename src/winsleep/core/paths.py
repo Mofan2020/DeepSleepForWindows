@@ -34,7 +34,19 @@ def is_frozen() -> bool:
 
 
 def app_dir() -> Path:
-    """The directory holding the config, the log and the runtime state."""
+    """The directory holding the config, the log and the runtime state.
+
+    The machine-wide place is preferred, because the daemon runs as
+    ``SYSTEM`` and the window runs as the user: both have to look in
+    the same place, and only a machine-wide directory is the same place
+    for two different accounts.
+
+    The catch is that a machine-wide directory can be owned by the
+    administrators, and then the window - which no longer asks for
+    administrator rights - cannot write the settings into it.  So the
+    directory is checked, and a directory that cannot be written to is
+    left alone in favour of the user's own.
+    """
     override = os.environ.get("WINSLEEP_HOME")
     if override:
         return Path(override).expanduser().resolve()
@@ -42,13 +54,41 @@ def app_dir() -> Path:
     if is_frozen():
         program_data = os.environ.get("ProgramData")
         if program_data:
-            return Path(program_data) / "DeepSleepForWindows"
+            candidate = Path(program_data) / "DeepSleepForWindows"
+            if _is_writable(candidate):
+                return candidate
 
     local = os.environ.get("LOCALAPPDATA")
     if local:
         return Path(local) / "DeepSleepForWindows"
 
     return Path.home() / ".deepsleep-for-windows"
+
+
+def _is_writable(directory: Path) -> bool:
+    """True when this process may write into that directory.
+
+    A directory that does not exist yet counts as writable when its
+    parent can be written to, because making it is the next thing that
+    happens.  A directory that cannot be reached at all is not
+    writable.
+
+    The test writes a file rather than looking at permissions: what
+    matters is whether the write works, and the permissions of a
+    machine-wide directory are not something to reason about from the
+    outside.
+    """
+    probe = directory / ".writable"
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        probe.write_text("", encoding="utf-8")
+    except OSError:
+        return False
+    try:
+        probe.unlink(missing_ok=True)
+    except OSError:
+        pass
+    return True
 
 
 def config_path() -> Path:

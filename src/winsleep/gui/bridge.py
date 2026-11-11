@@ -38,17 +38,83 @@ def _is_admin() -> bool:
         return False
 
 
-def _elevate_and_restart() -> None:
-    """Re-launch the current executable with administrator privileges and exit."""
+def _run_elevated_command(command: str, timeout_seconds: int = 120) -> dict[str, Any]:
+    """Run one sub-command elevated and wait for it to finish.
+
+    The GUI stays open.  A second copy of the program is started with
+    administrator rights, but it only runs the given sub-command (like
+    ``install``) and exits.  This one waits for it, so the result is
+    known right away.
+
+    This replaces the old approach of killing the window and restarting
+    the whole program elevated - which threw the window away and never
+    actually ran the command.
+    """
     if sys.platform != "win32":
-        return
+        return {"ok": False, "message": "只在 Windows 上可用"}
+
+    executable = sys.executable
+    if getattr(sys, "frozen", False):
+        params = command
+    else:
+        params = f"-m winsleep.cli {command}"
+
+    log.info("running elevated: %s %s", command, executable)
+
+    # ShellExecuteExW with SEE_MASK_NOCLOSEPROCESS gives us a handle
+    # we can wait on.  ShellExecuteW does not.
+    SEE_MASK_NOCLOSEPROCESS = 0x00000040
+    SW_HIDE = 0
+
+    class SHELLEXECUTEINFOW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", ctypes.c_uint),
+            ("fMask", ctypes.c_uint),
+            ("hwnd", ctypes.c_void_p),
+            ("lpVerb", ctypes.c_wchar_p),
+            ("lpFile", ctypes.c_wchar_p),
+            ("lpParameters", ctypes.c_wchar_p),
+            ("lpDirectory", ctypes.c_wchar_p),
+            ("nShow", ctypes.c_int),
+            ("hInstApp", ctypes.c_void_p),
+            ("lpIDList", ctypes.c_void_p),
+            ("lpClass", ctypes.c_wchar_p),
+            ("hkeyClass", ctypes.c_void_p),
+            ("dwHotKey", ctypes.c_uint),
+            ("hIcon", ctypes.c_void_p),
+            ("hProcess", ctypes.c_void_p),
+        ]
+
+    info = SHELLEXECUTEINFOW()
+    info.cbSize = ctypes.sizeof(SHELLEXECUTEINFOW)
+    info.fMask = SEE_MASK_NOCLOSEPROCESS
+    info.lpVerb = "runas"
+    info.lpFile = executable
+    info.lpParameters = params
+    info.nShow = SW_HIDE
+
     try:
-        executable = sys.executable
-        params = " ".join(f'"{a}"' if " " in a else a for a in sys.argv)
-        ctypes.windll.shell32.ShellExecuteW(None, "runas", executable, params, None, 1)
-    except Exception:
-        pass
-    sys.exit(0)
+        ok = ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": f"无法启动提权进程：{exc}"}
+
+    if not ok:
+        # The user clicked "No" on the UAC prompt, or the system
+        # refused.  GetLastError gives the reason.
+        error = ctypes.windll.kernel32.GetLastError()
+        return {"ok": False, "message": f"提权被拒绝（错误码 {error}）"}
+
+    if info.hProcess:
+        # Wait for the elevated process to finish.
+        WAIT_TIMEOUT = 0x00000102
+        result = ctypes.windll.kernel32.WaitForSingleObject(
+            info.hProcess, timeout_seconds * 1000
+        )
+        ctypes.windll.kernel32.CloseHandle(info.hProcess)
+        if result == WAIT_TIMEOUT:
+            return {"ok": False, "message": "安装超时，请重试"}
+
+    return {"ok": True, "message": "完成"}
 
 #: How long the bridge waits for the daemon to answer.
 DAEMON_TIMEOUT_SECONDS = 3.0
@@ -270,11 +336,14 @@ class Bridge:
             return {"installed": False, "running": False, "agent_running": False}
 
     def install_service(self) -> dict[str, Any]:
-        """Register the background tasks and start them."""
+        """Register the background tasks and start them.
+
+        When the window is not running as administrator, an elevated
+        helper is started that runs the ``install`` command and exits.
+        The window stays open and waits for it.
+        """
         if not _is_admin():
-            log.info("install_service needs administrator privileges; re-launching elevated")
-            _elevate_and_restart()
-            return {"ok": False, "message": "请求管理员权限中..."}
+            return _run_elevated_command("install")
 
         from ..core import install
 
@@ -296,9 +365,7 @@ class Bridge:
     def start_service(self) -> dict[str, Any]:
         """Start the background service."""
         if not _is_admin():
-            log.info("start_service needs administrator privileges; re-launching elevated")
-            _elevate_and_restart()
-            return {"ok": False, "message": "请求管理员权限中..."}
+            return _run_elevated_command("start")
 
         from ..core import install
 
@@ -308,9 +375,7 @@ class Bridge:
     def stop_service(self) -> dict[str, Any]:
         """Stop the background service."""
         if not _is_admin():
-            log.info("stop_service needs administrator privileges; re-launching elevated")
-            _elevate_and_restart()
-            return {"ok": False, "message": "请求管理员权限中..."}
+            return _run_elevated_command("stop")
 
         from ..core import install
 
@@ -320,14 +385,64 @@ class Bridge:
     def uninstall_service(self) -> dict[str, Any]:
         """Remove the background tasks."""
         if not _is_admin():
-            log.info("uninstall_service needs administrator privileges; re-launching elevated")
-            _elevate_and_restart()
-            return {"ok": False, "message": "请求管理员权限中..."}
+            return _run_elevated_command("uninstall")
 
         from ..core import install
 
         ok, detail = install.uninstall_all()
         return {"ok": ok, "message": detail}
+
+    # -- Microsoft telemetry ----------------------------------------------
+
+    def telemetry_state(self) -> dict[str, Any]:
+        """How much of the Microsoft telemetry is turned off."""
+        from ..core import telemetry
+
+        try:
+            return telemetry.telemetry_status()
+        except Exception as exc:  # noqa: BLE001 - the window has to say why
+            log.exception("the telemetry state could not be read")
+            return {"ok": False, "message": str(exc)}
+
+    def set_telemetry_disabled(self, disabled: bool) -> dict[str, Any]:
+        """Turn the Microsoft telemetry off, or put it back.
+
+        Turning it off needs administrator rights: the registry keys
+        are under HKLM, the services belong to the system, and the
+        hosts file is in the Windows directory.  When the window is not
+        elevated, an elevated helper does the work and the window waits
+        for it - so the answer is known right away and the switch can
+        show the new state instead of guessing.
+        """
+        from ..core import telemetry
+
+        if not _is_admin():
+            # The helper runs the same code; the marker tells it which
+            # way to go.
+            command = "telemetry-off" if disabled else "telemetry-on"
+            result = _run_elevated_command(command, timeout_seconds=180)
+            if not result.get("ok"):
+                return result
+        else:
+            try:
+                if disabled:
+                    ok, message = telemetry.disable_telemetry()
+                else:
+                    ok, message = telemetry.enable_telemetry()
+            except Exception as exc:  # noqa: BLE001
+                log.exception("the telemetry could not be changed")
+                return {"ok": False, "message": str(exc)}
+            if not ok:
+                return {"ok": False, "message": message}
+
+        # Read the state back, so the window shows what the machine
+        # really does rather than what was asked for.
+        state = self.telemetry_state()
+        return {
+            "ok": bool(state.get("ok")),
+            "message": "已关闭" if disabled else "已恢复",
+            "telemetry": state.get("status", {}),
+        }
 
     # -- the schedule ------------------------------------------------------
 

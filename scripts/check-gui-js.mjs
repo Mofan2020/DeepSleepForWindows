@@ -58,6 +58,7 @@ const code = [
   extract('serviceButton'),
   extract('renderOwnPlans'),
   extract('renderGpu'),
+  extract('refreshTelemetry'),
   extract('refresh'),
 ].join('\n\n');
 

@@ -230,6 +230,24 @@
     </div>
 
     <div class="panel glass">
+      <div class="panel-head">
+        <div class="grow">
+          <h2>微软遥测</h2>
+          <p class="muted">关掉 Windows 往微软发的遥测数据。改完立即生效。</p>
+        </div>
+        <div class="row-actions">
+          <label class="switch">
+            <input type="checkbox" id="telemetryToggle">
+            <span id="telemetryToggleLabel">禁止遥测</span>
+          </label>
+        </div>
+      </div>
+      <div class="card-value" id="telemetryValue">读取中…</div>
+      <p class="hint" id="telemetryHint"></p>
+      <div class="settings" id="telemetryDetail"></div>
+    </div>
+
+    <div class="panel glass">
       <h2>维护</h2>
       <div class="toolbar">
         <button class="btn ghost" id="refreshBtn">刷新</button>

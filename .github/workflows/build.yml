@@ -196,6 +196,101 @@ jobs:
           Get-Content (Join-Path $env:RUNNER_TEMP "selftest_err.txt") -Raw | Write-Host
           if ($proc.ExitCode -ne 0) { Write-Error "the bundle is missing something"; exit 1 }
 
+      # The tasks are registered from XML, so the XML has to be one the
+      # real scheduler accepts.  A file it refuses is a task that is
+      # never created, and the background half never starts - with
+      # nothing on the screen to say why.  The runner has a scheduler,
+      # so the file is handed to it and then removed again.
+      - name: The task XML is one the scheduler accepts
+        shell: pwsh
+        run: |
+          $exe = "dist\DeepSleepForWindows.exe"
+          $testName = "DeepSleepForWindows-CI-Test"
+
+          foreach ($which in @("daemon", "agent", "tray")) {
+            $xmlFile = Join-Path $env:RUNNER_TEMP "task-$which.xml"
+            if (Test-Path $xmlFile) { Remove-Item $xmlFile -Force }
+
+            # The program writes the file itself, in the UTF-16 the
+            # scheduler reads.  A shell redirect would write the
+            # console's code page instead and the file would be
+            # unreadable.  Start-Process -Wait is needed because the
+            # executable is a GUI binary: PowerShell does not wait for
+            # one started with &.
+            $proc = Start-Process -FilePath $exe `
+              -ArgumentList "task-xml", $which, "--write", $xmlFile `
+              -Wait -PassThru -NoNewWindow
+            if ($proc.ExitCode -ne 0) { Write-Error "task-xml $which failed"; exit 1 }
+            if (-not (Test-Path $xmlFile)) { Write-Error "no XML for $which"; exit 1 }
+            if ((Get-Item $xmlFile).Length -lt 200) {
+              Write-Error "the XML for $which is too short to be a task"
+              exit 1
+            }
+
+            $create = & schtasks /Create /XML $xmlFile /TN $testName /F 2>&1
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host $create
+              Write-Error "the scheduler refused the $which task"
+              exit 1
+            }
+            Write-Host "the scheduler accepted the $which task"
+
+            # Read it back, so a task that was created wrongly is
+            # noticed here rather than on somebody's machine.
+            $back = & schtasks /Query /TN $testName /XML 2>&1
+            if ($LASTEXITCODE -ne 0) { Write-Error "the $which task cannot be read back"; exit 1 }
+            if ($back -notmatch "RestartOnFailure") {
+              Write-Error "the $which task lost its restart policy"; exit 1
+            }
+
+            & schtasks /Delete /TN $testName /F | Out-Null
+          }
+          Write-Host "all three tasks were accepted by the scheduler"
+
+      # The program keeps a copy of itself in a folder of its own, and
+      # the tasks name that copy.  If the copy is not made, the tasks
+      # point at nothing - which is exactly the "the background half is
+      # gone" problem.  A run in a temporary folder shows whether the
+      # copy is really made.
+      - name: The program copies itself to its own folder
+        shell: pwsh
+        run: |
+          $exe = "dist\DeepSleepForWindows.exe"
+          $programDir = Join-Path $env:RUNNER_TEMP "program-copy"
+          $env:WINSLEEP_PROGRAM_DIR = $programDir
+
+          $out = Join-Path $env:RUNNER_TEMP "copy-version.txt"
+          $proc = Start-Process -FilePath $exe -ArgumentList "--version" `
+            -Wait -PassThru -NoNewWindow -RedirectStandardOutput $out
+          if ($proc.ExitCode -ne 0) { Write-Error "the program did not run"; exit 1 }
+
+          $copy = Join-Path $programDir "DeepSleepForWindows.exe"
+          if (-not (Test-Path $copy)) {
+            Write-Error "the program did not copy itself to $programDir"
+            exit 1
+          }
+          $manifest = Join-Path $programDir "manifest.json"
+          if (-not (Test-Path $manifest)) {
+            Write-Error "the copy has no manifest"; exit 1
+          }
+          $data = Get-Content $manifest -Raw | ConvertFrom-Json
+          if ($data.sha256.Length -ne 64) { Write-Error "the manifest has no fingerprint"; exit 1 }
+          Write-Host "copied to $programDir, manifest says $($data.version) $($data.sha256)"
+
+          # Run it a second time.  The same program must not be copied
+          # again, and the answer has to say so.
+          $before = (Get-Item $copy).LastWriteTimeUtc
+          $out2 = Join-Path $env:RUNNER_TEMP "copy-version2.txt"
+          $proc2 = Start-Process -FilePath $exe -ArgumentList "--version" `
+            -Wait -PassThru -NoNewWindow -RedirectStandardOutput $out2
+          if ($proc2.ExitCode -ne 0) { Write-Error "the second run failed"; exit 1 }
+          $after = (Get-Item $copy).LastWriteTimeUtc
+          if ($after -ne $before) {
+            Write-Error "the copy was written again although it was already there"
+            exit 1
+          }
+          Write-Host "the second run left the copy alone"
+
       - name: Package (zip)
         shell: pwsh
         run: |

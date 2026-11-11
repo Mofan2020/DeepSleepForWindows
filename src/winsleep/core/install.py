@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import subprocess
 import sys
+from pathlib import Path
 
 log = logging.getLogger("winsleep.install")
 
@@ -95,23 +96,36 @@ def _python_exe() -> str:
     return sys.executable
 
 
-def _module_args(command: str) -> str:
-    """The command line that runs one of our sub commands.
+def program_command(command: str) -> tuple[Path, str]:
+    """The executable and the arguments that run one of our sub commands.
 
-    A frozen build is one executable with sub commands, so the command
-    is the executable followed by the sub command.  Running from source
-    needs the command line entry point, because the modules are not
-    scripts.
+    A frozen build is one executable with sub commands.  The path is
+    **not** the path of the file that happens to be running: it is the
+    copy the program keeps in its own folder.  That path never changes,
+    so a task registered today still points at a program after the user
+    has moved or deleted the file they first downloaded.
 
-    The path of the executable is taken from the running program, not
-    remembered in the settings.  The user is free to move the file,
-    and the task has to follow it - a task that points at a place
-    where the file no longer is fails with "the file was not found"
-    every single time.
+    Running from the source needs the command line entry point, because
+    the modules are not scripts.
     """
     if getattr(sys, "frozen", False):
-        return f'"{sys.executable}" {command}'
-    return f'"{sys.executable}" -m winsleep.cli {command}'
+        from . import bootstrap
+
+        executable = bootstrap.installed_exe()
+        if not executable.exists():
+            # The copy has not been made yet - a first run that never
+            # installed anything.  The running file is the best answer
+            # there is, and ``ensure_installed`` will put the copy
+            # there before the tasks are registered.
+            executable = Path(sys.executable)
+        return executable, command
+    return Path(sys.executable), f"-m winsleep.cli {command}"
+
+
+def _module_args(command: str) -> str:
+    """The command line that runs one of our sub commands."""
+    executable, arguments = program_command(command)
+    return f'"{executable}" {arguments}'
 
 
 def task_command(command: str) -> str:
@@ -126,79 +140,60 @@ def task_command(command: str) -> str:
 
 
 def install_daemon_task() -> tuple[bool, str]:
-    """Create the task that starts the daemon at logon."""
-    command = _module_args("daemon")
-    args = [
-        "schtasks",
-        "/Create",
-        "/TN",
-        DAEMON_TASK,
-        "/TR",
-        command,
-        "/SC",
-        "ONLOGON",
-        "/F",
-    ]
-    result = _run(args)
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
-        return False, detail or "schtasks failed"
-    return True, DAEMON_TASK
+    """Create the task that runs the daemon.
 
+    The daemon is registered from XML rather than with the command line
+    switches, because only the XML can say "start this again if it
+    stops" - which is what keeps the background half from quietly
+    disappearing.
+    """
+    from . import tasks
+
+    executable, arguments = program_command("daemon")
+    return tasks.register_task(
+        DAEMON_TASK,
+        executable,
+        arguments,
+        description="DeepSleep For Windows — 电源计划与规则",
+        delay_seconds=20,
+    )
 
 def install_agent_task() -> tuple[bool, str]:
-    """Create the task that starts the agent in the interactive session.
+    """Create the task that runs the agent in the logged on session.
 
-    ``/IT`` makes it run in the interactive session, which is the whole
-    point: the agent has to be in the same session as the keyboard.
+    The agent has to be in the session with the keyboard, so its
+    principal is the user group with an interactive token.  No password
+    is stored, and none is asked for - which is what makes the task
+    possible to register from a program that is not running as that
+    user.
     """
-    command = _module_args("agent")
-    args = [
-        "schtasks",
-        "/Create",
-        "/TN",
-        AGENT_TASK,
-        "/TR",
-        command,
-        "/SC",
-        "ONLOGON",
-        "/IT",
-        "/F",
-    ]
-    result = _run(args)
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
-        return False, detail or "schtasks failed"
-    return True, AGENT_TASK
+    from . import tasks
 
+    executable, arguments = program_command("agent")
+    return tasks.register_task(
+        AGENT_TASK,
+        executable,
+        arguments,
+        description="DeepSleep For Windows — 空闲时间与锁屏",
+        delay_seconds=25,
+    )
 
 def install_tray_task() -> tuple[bool, str]:
-    """Create the task that starts the program at every logon.
+    """Create the task that puts the icon in the notification area.
 
-    The task runs in the interactive session, because the icon in the
-    notification area needs a desktop to live on.  It is a separate
-    task from the daemon, so the daemon keeps working even when the
-    window is not there.
+    It runs at logon in the user's session, because the icon needs a
+    desktop to live on.
     """
-    command = _module_args("tray")
-    args = [
-        "schtasks",
-        "/Create",
-        "/TN",
-        TRAY_TASK,
-        "/TR",
-        command,
-        "/SC",
-        "ONLOGON",
-        "/IT",
-        "/F",
-    ]
-    result = _run(args)
-    if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
-        return False, detail or "schtasks failed"
-    return True, TRAY_TASK
+    from . import tasks
 
+    executable, arguments = program_command("tray")
+    return tasks.register_task(
+        TRAY_TASK,
+        executable,
+        arguments,
+        description="DeepSleep For Windows — 托盘图标",
+        delay_seconds=30,
+    )
 
 def start_tray() -> tuple[bool, str]:
     """Start the notification area icon right now."""
@@ -329,18 +324,25 @@ def task_points_at(name: str, executable: str) -> bool:
 
 
 def install_all() -> tuple[bool, str]:
-    """Register the tasks.
+    """Put the program in its own folder and register the tasks.
 
-    The tasks are always created from the running program, so they
-    point at the place the program is right now.  A task that was
-    registered when the program stood somewhere else is replaced.
+    The copy comes first.  The tasks name the copy, not the file the
+    user downloaded, so that a task keeps working after the download
+    has been moved or deleted - which is one of the ways a background
+    half disappears without anything saying why.
 
-    The tray task is the one that may fail: an interactive task needs
-    the password of the user when it is created from a command line,
-    and some machines refuse it.  The other two are what the program
-    really needs, so a failure of the tray does not fail the whole
-    installation.
+    The tray task is the one that may fail without failing the whole
+    installation: the daemon and the agent are what the program really
+    needs.
     """
+    from . import bootstrap
+
+    ok, detail = bootstrap.ensure_installed()
+    if not ok:
+        # A copy that could not be made is worth saying out loud: the
+        # tasks would point at a file that is not there.
+        return False, f"程序副本没能放好：{detail}"
+
     ok, detail = install_daemon_task()
     if not ok:
         return False, detail
@@ -354,6 +356,13 @@ def install_all() -> tuple[bool, str]:
         messages.append("托盘图标已加入开机启动")
     else:
         messages.append(f"开机自启没有装上：{tray_detail}")
+
+    # A logon trigger waits for a logon that has already happened, so
+    # the tasks are started here as well.  Otherwise the program is
+    # installed and does nothing at all until the machine restarts.
+    started_ok, started_detail = start_all()
+    messages.append(started_detail if started_ok else f"没能启动：{started_detail}")
+
     return True, "，".join(messages)
 
 
@@ -367,7 +376,9 @@ def tasks_are_current() -> tuple[bool, str]:
     """
     if not getattr(sys, "frozen", False):
         return True, ""
-    executable = str(sys.executable).lower()
+    from . import bootstrap
+
+    executable = str(bootstrap.installed_exe()).lower()
     for name in (DAEMON_TASK, AGENT_TASK, TRAY_TASK):
         if not task_exists(name):
             continue
@@ -412,6 +423,10 @@ def uninstall_all() -> tuple[bool, str]:
 # port of its own.
 AGENT_HEARTBEAT = "agent.alive"
 
+#: The tray writes its own heartbeat, so "is the icon there?" can be
+#: answered without guessing.
+TRAY_HEARTBEAT = "tray.alive"
+
 # How long a heartbeat stays good.  The agent writes it every five
 # seconds, so twenty seconds is generous enough to survive a busy
 # moment and short enough that a stopped agent is noticed right away.
@@ -425,24 +440,29 @@ def heartbeat_path():
     return paths.app_dir() / AGENT_HEARTBEAT
 
 
-def write_heartbeat() -> None:
-    """Say that the agent is alive."""
+def write_heartbeat(name: str = AGENT_HEARTBEAT) -> None:
+    """Say that one of the background halves is alive."""
     import time
 
     try:
-        path = heartbeat_path()
+        path = heartbeat_path().parent / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(str(time.time()), encoding="utf-8")
     except OSError as exc:
         log.debug("could not write the heartbeat: %s", exc)
 
 
-def _heartbeat_is_fresh() -> bool:
-    """True when the agent wrote its heartbeat recently enough."""
+def _heartbeat_is_fresh(name: str = AGENT_HEARTBEAT) -> bool:
+    """True when a heartbeat file was written recently enough.
+
+    *name* is the file to look at: the agent and the tray each have
+    one, because they are separate processes that fail separately.
+    """
     import time
 
     try:
-        stamp = float(heartbeat_path().read_text(encoding="utf-8").strip())
+        path = heartbeat_path().parent / name
+        stamp = float(path.read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return False
     return (time.time() - stamp) < HEARTBEAT_SECONDS
@@ -505,6 +525,47 @@ def service_installed() -> bool:
 def tray_installed() -> bool:
     """True when the task that starts the program at logon is there."""
     return task_exists(TRAY_TASK)
+
+
+def start_all() -> tuple[bool, str]:
+    """Start every task right now.
+
+    A task with a logon trigger does not run the moment it is
+    registered - the logon it waits for has already happened.  Without
+    this, installing would leave the machine with three tasks and
+    nothing running until the next restart, and the icon in the
+    notification area would be missing until then.
+    """
+    started = []
+    failed = []
+    for name in (DAEMON_TASK, AGENT_TASK, TRAY_TASK):
+        if not task_exists(name):
+            failed.append(f"{name} is not registered")
+            continue
+        result = _run(["schtasks", "/Run", "/TN", name])
+        if result.returncode == 0:
+            started.append(name)
+        else:
+            detail = (result.stderr or result.stdout or "").strip()
+            failed.append(f"{name}: {detail or 'the task did not start'}")
+
+    if failed and not started:
+        return False, "; ".join(failed)
+
+    message = f"{len(started)} 个任务已启动"
+    if failed:
+        message += "；" + "；".join(failed)
+    return True, message
+
+
+def tray_running() -> bool:
+    """True when the icon in the notification area is there.
+
+    The tray writes a heartbeat of its own, so this answers the
+    question the user is really asking - "is the icon there?" - rather
+    than "is a task registered?".
+    """
+    return _heartbeat_is_fresh(TRAY_HEARTBEAT)
 
 
 def start_daemon() -> tuple[bool, str]:
@@ -592,6 +653,7 @@ def service_status() -> dict[str, object]:
         "running": daemon_running(),
         "agent_running": agent_running(),
         "tray_installed": tray_installed(),
+        "tray_running": tray_running(),
         # True when the tasks still point at a place where the program
         # is not any more.  The interface says so instead of leaving
         # the user wondering why the service does not start.

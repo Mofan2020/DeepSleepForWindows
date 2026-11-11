@@ -8,9 +8,11 @@
 
 from __future__ import annotations
 
+import ctypes
 import logging
 import subprocess
 import sys
+from ctypes import wintypes
 from pathlib import Path
 from typing import Any
 
@@ -365,50 +367,218 @@ def enable_telemetry() -> tuple[bool, str]:
     return True, "; ".join(messages)
 
 
-def telemetry_status() -> dict[str, Any]:
-    if sys.platform != "win32":
-        return {"ok": False, "message": "only available on Windows"}
+#: What the service manager says a service is doing.
+_SERVICE_STATE_NAMES = {
+    0x00000001: "stopped",
+    0x00000002: "starting",
+    0x00000003: "stopping",
+    0x00000004: "running",
+    0x00000005: "continuing",
+    0x00000006: "pausing",
+    0x00000007: "paused",
+}
 
-    status = {
+#: How a service is started.
+_START_TYPE_NAMES = {
+    0x00000000: "boot",
+    0x00000001: "system",
+    0x00000002: "automatic",
+    0x00000003: "manual",
+    0x00000004: "disabled",
+}
+
+_SC_MANAGER_CONNECT = 0x0001
+_SERVICE_QUERY_STATUS = 0x0004
+_SERVICE_QUERY_CONFIG = 0x0001
+
+
+class _SERVICE_STATUS(ctypes.Structure):
+    _fields_ = [
+        ("dwServiceType", wintypes.DWORD),
+        ("dwCurrentState", wintypes.DWORD),
+        ("dwControlsAccepted", wintypes.DWORD),
+        ("dwWin32ExitCode", wintypes.DWORD),
+        ("dwServiceSpecificExitCode", wintypes.DWORD),
+        ("dwCheckPoint", wintypes.DWORD),
+        ("dwWaitHint", wintypes.DWORD),
+    ]
+
+
+class _QUERY_SERVICE_CONFIG(ctypes.Structure):
+    _fields_ = [
+        ("dwServiceType", wintypes.DWORD),
+        ("dwStartType", wintypes.DWORD),
+        ("dwErrorControl", wintypes.DWORD),
+        ("lpBinaryPathName", wintypes.LPWSTR),
+        ("lpLoadOrderGroup", wintypes.LPWSTR),
+        ("dwTagId", wintypes.DWORD),
+        ("lpDependencies", wintypes.LPWSTR),
+        ("lpServiceStartName", wintypes.LPWSTR),
+        ("lpDisplayName", wintypes.LPWSTR),
+    ]
+
+
+def _service_state(name: str) -> dict[str, str]:
+    """What one service is doing, in words.
+
+    A service that is not on the machine at all comes back as
+    ``{"state": "missing", "start": "missing"}``, which is not an
+    error: not every machine has every telemetry service.
+    """
+    missing = {"state": "missing", "start": "missing"}
+    if sys.platform != "win32":
+        return missing
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    advapi32.OpenSCManagerW.restype = wintypes.HANDLE
+    handle_manager = advapi32.OpenSCManagerW(None, None, _SC_MANAGER_CONNECT)
+    if not handle_manager:
+        return {"state": "unknown", "start": "unknown"}
+
+    try:
+        handle_service = advapi32.OpenServiceW(
+            handle_manager, name, _SERVICE_QUERY_STATUS | _SERVICE_QUERY_CONFIG
+        )
+        if not handle_service:
+            return missing
+
+        try:
+            status = _SERVICE_STATUS()
+            if not advapi32.QueryServiceStatus(
+                handle_service, ctypes.byref(status)
+            ):
+                return {"state": "unknown", "start": "unknown"}
+
+            # Eight kilobytes is enough for the config of any service;
+            # the buffer is asked for the size it needs and then filled.
+            need = wintypes.DWORD(0)
+            advapi32.QueryServiceConfigW(
+                handle_service, None, 0, ctypes.byref(need)
+            )
+            buffer = ctypes.create_string_buffer(max(need.value, 8192))
+            config = ctypes.cast(
+                buffer, ctypes.POINTER(_QUERY_SERVICE_CONFIG)
+            ).contents
+            if not advapi32.QueryServiceConfigW(
+                handle_service, buffer, len(buffer), ctypes.byref(need)
+            ):
+                return {
+                    "state": _SERVICE_STATE_NAMES.get(
+                        status.dwCurrentState, "unknown"
+                    ),
+                    "start": "unknown",
+                }
+
+            return {
+                "state": _SERVICE_STATE_NAMES.get(
+                    status.dwCurrentState, "unknown"
+                ),
+                "start": _START_TYPE_NAMES.get(config.dwStartType, "unknown"),
+            }
+        finally:
+            advapi32.CloseServiceHandle(handle_service)
+    except Exception as exc:  # noqa: BLE001 - a query must not crash the window
+        log.debug("could not read the service %s: %s", name, exc)
+        return {"state": "unknown", "start": "unknown"}
+    finally:
+        advapi32.CloseServiceHandle(handle_manager)
+
+
+def _task_is_disabled(name: str) -> bool | None:
+    """Whether one task is disabled.
+
+    ``None`` means the task is not on the machine.  The answer comes
+    from the XML the scheduler publishes, which has a fixed shape and
+    no translated words in it.
+    """
+    import subprocess
+    import xml.etree.ElementTree as ElementTree
+
+    creationflags = 0x08000000 if sys.platform == "win32" else 0
+    try:
+        result = subprocess.run(
+            ["schtasks", "/Query", "/TN", name, "/XML"],
+            capture_output=True,
+            check=False,
+            creationflags=creationflags,
+        )
+    except OSError:
+        return None
+
+    if result.returncode != 0 or not result.stdout:
+        return None
+
+    try:
+        text = result.stdout.decode("utf-16", errors="replace")
+        if not text.lstrip().startswith("<?xml") and "<Task" not in text:
+            text = result.stdout.decode("utf-8", errors="replace")
+        root = ElementTree.fromstring(text)
+    except (ElementTree.ParseError, ValueError):
+        return None
+
+    # There is an ``Enabled`` under ``<Triggers>`` and another one
+    # under ``<Settings>``, and they mean different things.  The one
+    # that switches the task itself off is the one in the settings -
+    # a task whose trigger is on but whose settings say disabled does
+    # not run.
+    namespace = "{http://schemas.microsoft.com/windows/2004/02/mit/task}"
+    settings = root.find(f"{namespace}Settings")
+    if settings is None:
+        return False
+    enabled = settings.find(f"{namespace}Enabled")
+    if enabled is None or enabled.text is None:
+        return False
+    return enabled.text.strip().lower() == "false"
+
+
+def telemetry_status() -> dict[str, Any]:
+    """How much of the telemetry is already turned off.
+
+    Every part of the answer is read through an interface without a
+    language, so the same code gives the same answer on every Windows.
+    """
+    if sys.platform != "win32":
+        return {"ok": False, "message": "只在 Windows 上可用"}
+
+    status: dict[str, Any] = {
         "registry": {},
         "services": {},
         "hosts_blocked": False,
+        "hosts_blocked_count": 0,
         "tasks_disabled": 0,
+        "tasks_present": 0,
     }
 
     import winreg
+
     try:
-        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Policies\Microsoft\Windows\DataCollection") as key:
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection",
+        ) as key:
             value, _ = winreg.QueryValueEx(key, "AllowTelemetry")
             status["registry"]["AllowTelemetry"] = value
     except OSError:
         status["registry"]["AllowTelemetry"] = "not set"
 
-    for svc in _TELEMETRY_SERVICES:
-        try:
-            result = subprocess.run(["sc", "query", svc], capture_output=True, text=True, timeout=5)
-            status["services"][svc] = "running" if "RUNNING" in result.stdout else "stopped"
-        except Exception:
-            status["services"][svc] = "unknown"
+    for service in _TELEMETRY_SERVICES:
+        status["services"][service] = _service_state(service)
 
-    hosts_path = Path(r"C:\Windows\System32\drivers\etc\hosts")
+    hosts_path = Path(r"C:\\Windows\\System32\\drivers\\etc\\hosts")
     try:
         content = hosts_path.read_text(encoding="utf-8", errors="ignore")
-        blocked = sum(1 for h in _TELEMETRY_HOSTS if f"0.0.0.0 {h}" in content)
-        status["hosts_blocked"] = blocked > len(_TELEMETRY_HOSTS) // 2
+        blocked = sum(1 for host in _TELEMETRY_HOSTS if f"0.0.0.0 {host}" in content)
         status["hosts_blocked_count"] = blocked
-    except Exception:
-        pass
+        status["hosts_blocked"] = blocked > len(_TELEMETRY_HOSTS) // 2
+    except OSError as exc:
+        log.debug("the hosts file could not be read: %s", exc)
 
-    try:
-        result = subprocess.run(["schtasks", "/query", "/fo", "csv"], capture_output=True, text=True, timeout=10)
-        disabled = 0
-        for task in _TELEMETRY_TASKS:
-            task_name = task.strip("\\").replace("\\", "\\\\")
-            if f'"{task_name}",' in result.stdout and "Disabled" in result.stdout:
-                disabled += 1
-        status["tasks_disabled"] = disabled
-    except Exception:
-        pass
+    for task in _TELEMETRY_TASKS:
+        disabled = _task_is_disabled(task)
+        if disabled is None:
+            continue
+        status["tasks_present"] += 1
+        if disabled:
+            status["tasks_disabled"] += 1
 
     return {"ok": True, "status": status}

@@ -453,3 +453,95 @@ icacls <log> /grant "<DOMAIN\user>:(F)"
 **判断依据不能用 AccessCheck**：那个问的是**当前进程**的权限。窗口是提权的（属于 Administrators），守护进程不是。要问的是「用户本人能不能写」，所以走的是 DACL 里**用户自己**的那一条，不看组成员——否则提权进程会以为自己能写，就什么也不改。
 
 新增 `core/acl.py` 和 `tests/test_acl.py`。
+
+
+---
+
+## 0.4.0：窗口不再要管理员权限，程序保留一份自己的副本
+
+### 双击没窗口的真正原因
+
+`cli._open_window()` 提权一次，`gui.app.run()` 里 `_ensure_admin()` 又提权一次。两次都失败（或者用户点了「否」）时，两条路径都返回 0，于是一个窗口都没有、一句提示也没有。
+
+更要命的是 `bridge._elevate_and_restart()`：装服务时如果当前不是管理员，它用 `ShellExecuteW` 重启整个程序然后 `sys.exit(0)`——**窗口消失了，但 install 命令从没被执行过**。这就是「点安装并启动没反应，横幅还在」。
+
+**改法**：窗口本来就不需要管理员权限。电源计划的改动和装任务都是守护进程（SYSTEM 身份）或一次性提权子进程做的事，窗口只管跟它们说话。
+
+- `gui/app.py` 删掉 `_ensure_admin()`，`run()` 直接开窗口。
+- `cli._open_window()` 删掉提权分支。
+- `bridge._run_elevated_command(command)` 取代 `_elevate_and_restart()`：用 `ShellExecuteExW`（`SEE_MASK_NOCLOSEPROCESS`）起一个只跑 `install` / `uninstall` / `start` / `stop` / `telemetry-off` / `telemetry-on` 的子进程，`WaitForSingleObject` 等它结束，窗口留在原地。失败时把 `GetLastError` 的码和「提权被拒绝」写进结果，界面上能看见。
+
+### 程序有一份自己的副本
+
+计划任务里写死的路径必须是**不会变**的。以前 `_module_args()` 用的是 `sys.executable`——用户下载到 `Downloads` 就在 `Downloads`，删了下载，任务全废，而且没有任何提示（`0x80070002` 只写在任务结果里，没人会去看）。
+
+新增 `core/bootstrap.py`：
+
+- `installed_dir()` = `%LOCALAPPDATA%\DeepSleepForWindows\app`（`WINSLEEP_PROGRAM_DIR` 可覆盖，测试用）
+- `fingerprint(path)` = 文件的 SHA-256
+- `ensure_installed()`：算运行中程序的指纹 → 和副本比 → 不同就复制 → **读回来再比一次**（复制到一半、磁盘满了都会得到「文件在但不是这个程序」，只有读回来才知道）→ 写 `manifest.json`（version + sha256）
+- `is_installed_copy()` / `installed_exe()`
+
+`install._module_args()` 改成走 `bootstrap.installed_exe()`；`cli.main()` 每次启动先 `_keep_a_copy()`（失败只记日志，绝不阻止启动）。
+
+复制是普通用户权限就能做的（`%LOCALAPPDATA%` 是自己的），所以**只有注册计划任务那一步需要管理员**。
+
+### 任务用 XML 注册，不是命令行开关
+
+`schtasks /Create` 的参数做不了几件事：**不能设失败重启**，不能设运行时长上限，不能设电池策略。而这些恰好就是「后台莫名消失」的直接原因——默认 `ExecutionTimeLimit` 是**三天**，到点调度器直接杀掉；崩一次就再也不回来。
+
+`core/tasks.py` 生成完整 XML 再 `schtasks /Create /XML`：
+
+```xml
+<RestartOnFailure><Interval>PT1M</Interval><Count>10</Count></RestartOnFailure>
+<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+<DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+<StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+<StartWhenAvailable>true</StartWhenAvailable>
+```
+
+身份分开：
+
+- 守护进程：`<UserId>S-1-5-18</UserId>`（SYSTEM）+ `<RunLevel>HighestAvailable</RunLevel>` + `BootTrigger`。锁屏和未登录时也要工作。
+- 代理 / 托盘：`<GroupId>S-1-5-32-545</GroupId>`（Users）+ `<RunLevel>LeastPrivilege</RunLevel>` + `InteractiveToken`。**不存密码、创建时也不要密码**——这正是以前 `/IT` 从命令行建任务会失败的原因。
+
+XML 文件必须 UTF-16（调度器只认这个）。所以 `task-xml --write PATH` 让程序自己写文件，不让 shell 重定向——重定向会用控制台代码页。
+
+### 装完立刻启动
+
+`ONLOGON` 触发器等的是「登录」这个事件，而装的时候用户**早就登录了**。所以任务注册完什么都不跑，要等下次开机托盘才出现——用户看到的「菜单栏常驻还是没有」就是这么来的。
+
+`install.start_all()` 在注册完之后对三个任务各发一次 `schtasks /Run`。
+
+### 托盘状态怎么判断
+
+托盘进程启动时写 `tray.alive` 心跳（跟 agent 一样），`tray_running()` 看心跳是否在 20 秒内。窗口直接显示「托盘图标已显示 / 没有起来 / 没有装上」三种状态——Windows 11 默认把托盘图标收进小箭头里，不写清楚用户根本不知道是没起来还是被收起来了。
+
+### 遥测状态不读命令输出
+
+`telemetry_status()` 原来解析 `sc query` 的 `RUNNING` 和 `schtasks` 的 `Disabled`——**本地化文本**，中文系统上永远匹配不到，会把运行中的服务读成没运行。
+
+改成：
+
+- 服务 → `advapi32` 的 `OpenSCManagerW` / `OpenServiceW` / `QueryServiceStatus` / `QueryServiceConfigW`，读 `dwCurrentState` 和 `dwStartType` 的数字。
+- 任务 → `schtasks /Query /XML`，解析 XML。
+- 注册表 → 本来就是 `winreg`。
+
+**任务开关在 `<Settings><Enabled>`，不是 `<Triggers><Enabled>`**。两个都有 `Enabled`，意思完全不同：前者说这个任务能不能跑，后者说是哪个事件触发它。读错会把「运行中」读成「已禁用」。这个坑是变异测试逼出来的——我先写成 `all(所有 Enabled 都是 false)`，变异成 `any` 时测试没红，才发现逻辑本身就不对。
+
+### 变异测试的字节码缓存坑（会导致结果骗人）
+
+变异把 `== "false"` 换成 `!= "false"`：**长度完全一样，同一秒内写回**。Python 判断 `.pyc` 是否有效只看「mtime（秒）+ 文件大小」，两个都没变 → 它继续用变异版的字节码 → 后面的测试跑的是**磁盘上已经不存在的代码**。
+
+表现出来就是：变异测试报「39/39 全抓到」，紧接着跑 pytest 却有三个测试红，而那三个测试单跑又是绿的。
+
+修法：变异写入和还原之后都调 `forget_bytecode(path)` 删掉对应的 `.pyc`。
+
+**教训**：等长的字符串变异必须清字节码缓存，否则整个变异流程的结论不可信。
+
+### 其它
+
+- `paths.app_dir()` 先试 `%ProgramData%` 并**实际写一个探针文件**验证可写，不可写才退回 `%LOCALAPPDATA%`。窗口不再提权之后，被管理员创建的机器级目录它写不进去，会直接崩在保存设置上。
+- `selftest` 增加托盘图标能否画出来的检查——模块能 import 不等于能用，图标文件不在包里时图标就是没有。
+- CI 新增两步：把三种任务 XML 真的交给调度器注册、读回、删掉；以及用临时 `WINSLEEP_PROGRAM_DIR` 跑一次，验证副本和 manifest 真的生成、第二次跑不会重写。

@@ -175,19 +175,16 @@ def _make_log_writable() -> None:
 def _open_window() -> int:
     """Open the window, and tell the user if that does not work.
 
+    The window does not need administrator rights.  It talks to the
+    daemon for anything that does, and install/uninstall are done
+    through an elevated helper.  So the window is opened directly,
+    whatever rights the process has.
+
     There is no console window in a release build, so a failure has to
     be shown in a message box.  The reason and the place of the log
     file are in it, because a user who cannot see the window has no
     other way to find out what happened.
     """
-    # If we are not admin, re-launch elevated so the window can
-    # register tasks and change power plans.
-    if not _is_admin():
-        if _elevate_and_exit(sys.argv):
-            return 0
-        # If elevation was refused, fall through and try anyway.
-        log.info("elevation was refused; trying to open the window anyway")
-
     try:
         from .gui.app import run
 
@@ -200,7 +197,12 @@ def _open_window() -> int:
 
 def _cmd_tray(_args: argparse.Namespace) -> int:
     """Stay in the notification area without showing a window."""
-    from .core import tray, winapi, winpower
+    from .core import install, tray, winapi, winpower
+
+    # Say that the icon is there.  Without this there is no way to tell
+    # "the tray is running" from "the task is registered and silently
+    # doing nothing", and the user's question is the first one.
+    install.write_heartbeat(install.TRAY_HEARTBEAT)
 
     def _show() -> None:
         # The window is opened by a second copy of the program, so that
@@ -261,6 +263,28 @@ def _cmd_agent(_args: argparse.Namespace) -> int:
     from .core.agent import main as agent_main
 
     return agent_main()
+
+
+def _cmd_start(_args: argparse.Namespace) -> int:
+    """Start the background service.
+
+    Registering the tasks needs administrator rights; starting them
+    does not, so this command is safe to run as the plain user.
+    """
+    from .core import install
+
+    ok, detail = install.start_daemon()
+    print(detail)
+    return 0 if ok else 1
+
+
+def _cmd_stop(_args: argparse.Namespace) -> int:
+    """Stop the background service and its processes."""
+    from .core import install
+
+    ok, detail = install.stop_daemon()
+    print(detail)
+    return 0 if ok else 1
 
 
 def _cmd_install(_args: argparse.Namespace) -> int:
@@ -340,6 +364,55 @@ def _cmd_sleep(args: argparse.Namespace) -> int:
     return 1
 
 
+def _cmd_task_xml(args: argparse.Namespace) -> int:
+    """Print the XML of one of the scheduled tasks.
+
+    The XML is what the scheduler is given, so printing it is the way
+    to look at what a task will really do - and the way to check, on a
+    machine that has a scheduler, that the file is one it accepts.
+    """
+    from .core import tasks
+    from .version import __version__
+
+    names = {
+        "daemon": tasks.DAEMON_TASK,
+        "agent": tasks.AGENT_TASK,
+        "tray": tasks.TRAY_TASK,
+    }
+    name = names.get(args.which)
+    if name is None:
+        print(f"error: {args.which} is not one of {', '.join(names)}")
+        return 2
+
+    from .core.install import program_command
+
+    executable, arguments = program_command(args.which)
+    xml = tasks.build_task_xml(
+        name,
+        executable,
+        arguments,
+        description=f"DeepSleep For Windows {__version__} — {args.which}",
+        delay_seconds=0,
+    )
+
+    if args.write:
+        # The scheduler only reads UTF-16, and a shell redirect would
+        # write the console's own code page instead.  So the file is
+        # written here, where the encoding is known.
+        from pathlib import Path
+
+        try:
+            Path(args.write).write_text(xml, encoding="utf-16")
+        except OSError as exc:
+            print(f"error: the file could not be written: {exc}")
+            return 1
+        print(f"written to {args.write}")
+        return 0
+
+    print(xml, end="")
+    return 0
+
+
 def _cmd_selftest(_args: argparse.Namespace) -> int:
     """Check that everything the program needs is really in the bundle.
 
@@ -385,6 +458,21 @@ def _cmd_selftest(_args: argparse.Namespace) -> int:
         for name in missing:
             print(f"  - {name}")
         return 1
+
+    # A module that imports is not the same as a module that works.
+    # The icon is drawn from a file the build has to carry, and a
+    # missing file leaves the program with no icon at all - which is
+    # exactly the "the tray is not there" problem, with nothing in the
+    # log to explain it.
+    if sys.platform == "win32":
+        from .core import tray
+
+        built = tray.make_icon()
+        if built is None:
+            print("the icon for the notification area could not be made")
+            return 1
+        source = tray.icon_path()
+        print(f"tray icon:   {source if source else 'drawn, no file in the bundle'}")
 
     print("everything the program needs is in the bundle")
     return 0
@@ -566,6 +654,24 @@ def _cmd_lock(_args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _cmd_telemetry_off(_args: argparse.Namespace) -> int:
+    """Turn the Microsoft telemetry off.  This is what the helper runs."""
+    from .core import telemetry
+
+    ok, message = telemetry.disable_telemetry()
+    print(message)
+    return 0 if ok else 1
+
+
+def _cmd_telemetry_on(_args: argparse.Namespace) -> int:
+    """Put the Microsoft telemetry back."""
+    from .core import telemetry
+
+    ok, message = telemetry.enable_telemetry()
+    print(message)
+    return 0 if ok else 1
+
+
 def _cmd_telemetry_disable(_args: argparse.Namespace) -> int:
     from .core import telemetry
     ok, msg = telemetry.disable_telemetry()
@@ -620,6 +726,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("uninstall", help="remove the scheduled tasks").set_defaults(
         func=_cmd_uninstall
     )
+    sub.add_parser("start", help="start the background service").set_defaults(func=_cmd_start)
+    sub.add_parser("stop", help="stop the background service").set_defaults(func=_cmd_stop)
     sub.add_parser("status", help="print the current state").set_defaults(func=_cmd_status)
     sub.add_parser("plans", help="list the power plans").set_defaults(func=_cmd_plans)
 
@@ -629,11 +737,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("lock", help="lock the screen").set_defaults(func=_cmd_lock)
 
+    sub.add_parser(
+        "telemetry-off", help="turn the Microsoft telemetry off"
+    ).set_defaults(func=_cmd_telemetry_off)
+    sub.add_parser(
+        "telemetry-on", help="put the Microsoft telemetry back"
+    ).set_defaults(func=_cmd_telemetry_on)
+
     telemetry_parser = sub.add_parser("telemetry", help="manage Microsoft telemetry")
     telemetry_sub = telemetry_parser.add_subparsers(dest="telemetry_cmd")
     telemetry_sub.add_parser("disable", help="disable Microsoft telemetry").set_defaults(func=_cmd_telemetry_disable)
     telemetry_sub.add_parser("enable", help="restore Microsoft telemetry").set_defaults(func=_cmd_telemetry_enable)
     telemetry_sub.add_parser("status", help="show telemetry status").set_defaults(func=_cmd_telemetry_status)
+
+    task_xml = sub.add_parser(
+        "task-xml", help="print the XML of one of the scheduled tasks"
+    )
+    task_xml.add_argument("which", choices=["daemon", "agent", "tray"])
+    task_xml.add_argument(
+        "--write",
+        metavar="PATH",
+        default="",
+        help="write the XML straight to a file, in the encoding the scheduler reads",
+    )
+    task_xml.set_defaults(func=_cmd_task_xml)
 
     sub.add_parser(
         "selftest", help="check that the bundle is complete"
@@ -656,6 +783,32 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _keep_a_copy() -> None:
+    """Make sure the folder this program runs from has the right file.
+
+    The scheduled tasks name the copy in that folder, not whatever file
+    the user happened to double-click.  Keeping the copy up to date
+    here means a new download is picked up by the background half as
+    well, without the user having to install anything again.
+
+    Nothing here is allowed to stop the program.  A copy that cannot be
+    made is written to the log, and the program carries on with the
+    file it is running from.
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    try:
+        from .core import bootstrap
+
+        ok, detail = bootstrap.ensure_installed()
+        if ok:
+            log.debug("the program folder: %s", detail)
+        else:
+            log.warning("the program could not be copied: %s", detail)
+    except Exception as exc:  # noqa: BLE001 - never stop for this
+        log.debug("the program copy was skipped: %s", exc)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -664,6 +817,7 @@ def main(argv: list[str] | None = None) -> int:
         # Started without a command - that is what happens when the
         # program is double clicked, so the window is what opens.
         _setup_logging(args.verbose)
+        _keep_a_copy()
         return _open_window()
 
     # A command was given, so the output goes to the shell that started
@@ -674,6 +828,7 @@ def main(argv: list[str] | None = None) -> int:
     # be able to encode them.
     _use_utf8_output()
     _setup_logging(args.verbose)
+    _keep_a_copy()
     return int(args.func(args))
 
 

@@ -559,10 +559,90 @@ function renderService(service) {
   text.textContent = service.agent_running
     ? '后台服务运行中，正在看着你的键盘和鼠标。'
     : '后台服务运行中。代理没有在运行，读不到真实的空闲时间。';
-  hint.textContent = '';
+
+  /* The icon lives in the notification area, which Windows 11 hides
+   * behind a small arrow by default.  Saying whether it is really
+   * there is the only useful answer to "where is it?". */
+  const tray = [];
+  if (service.tray_installed) {
+    tray.push(service.tray_running ? '托盘图标已显示' : '托盘图标没有起来');
+  } else {
+    tray.push('托盘图标没有装上');
+  }
+  hint.textContent = tray.join('，');
+
   actions.appendChild(
     serviceButton('停止', () => api().stop_service(), false)
   );
+}
+
+/* ------------------------------------------------------ 微软遥测 */
+
+/* Read how much of the telemetry is turned off and draw it.
+ *
+ * The switch is set from what the machine says, not from what was
+ * asked for: a switch that shows the wish instead of the result is
+ * worse than no switch. */
+async function refreshTelemetry() {
+  let answer;
+  try {
+    answer = await api().telemetry_state();
+  } catch (err) {
+    $('telemetryValue').textContent = '读不到';
+    $('telemetryHint').textContent = String(err);
+    return;
+  }
+
+  if (!answer || !answer.ok) {
+    $('telemetryValue').textContent = '读不到';
+    $('telemetryHint').textContent = (answer && answer.message) || '';
+    return;
+  }
+
+  const status = answer.status || {};
+  const services = status.services || {};
+  const names = Object.keys(services);
+
+  // The telemetry counts as off when the policy says so and most of
+  // the services are disabled.  Anything less is partial, and the
+  // label says which.
+  const policy = status.registry && status.registry.AllowTelemetry;
+  const policyOff = policy === 0;
+  const disabled = names.filter((name) => services[name].start === 'disabled');
+  const tasksOff = (status.tasks_disabled || 0) > 0;
+  const hostsOff = !!status.hosts_blocked;
+
+  const fullyOff = policyOff && disabled.length >= Math.ceil(names.length / 2);
+
+  $('telemetryToggle').checked = fullyOff;
+  $('telemetryValue').textContent = fullyOff
+    ? '已关闭'
+    : policyOff || disabled.length || hostsOff || tasksOff
+      ? '部分关闭'
+      : '未关闭';
+
+  const parts = [];
+  parts.push(policyOff ? '策略已禁止' : `策略：${policy === undefined ? '未设置' : policy}`);
+  parts.push(`服务已禁用 ${disabled.length}/${names.length}`);
+  parts.push(hostsOff ? `已屏蔽 ${status.hosts_blocked_count || 0} 个域名` : '域名未屏蔽');
+  parts.push(`计划任务已禁用 ${status.tasks_disabled || 0}/${status.tasks_present || 0}`);
+  $('telemetryHint').textContent = parts.join(' · ');
+
+  const detail = $('telemetryDetail');
+  if (!detail) return;
+  detail.innerHTML = '';
+  for (const name of names) {
+    const row = document.createElement('div');
+    row.className = 'setting-row';
+    const label = document.createElement('span');
+    label.className = 'setting-label';
+    label.textContent = name;
+    const value = document.createElement('span');
+    value.className = 'setting-value';
+    value.textContent = `${services[name].state} / ${services[name].start}`;
+    row.append(label, value);
+    detail.appendChild(row);
+  }
 }
 
 /* ------------------------------------------------------------- refresh */
@@ -624,6 +704,8 @@ async function refresh() {
   $('serverValue').textContent = config.server_mode ? '开启' : '关闭';
   $('keepAwakeToggle').checked = !!config.keep_awake;
   $('keepAwakeValue').textContent = config.keep_awake ? '开启' : '关闭';
+
+  refreshTelemetry();
 
   renderOwnPlans();
   renderGpu();
@@ -749,6 +831,26 @@ function wire() {
 
   $('keepAwakeToggle').addEventListener('change', async (event) => {
     await api().set_keep_awake(event.target.checked);
+  });
+
+  $('telemetryToggle').addEventListener('change', async (event) => {
+    const wanted = event.target.checked;
+    const hint = $('telemetryHint');
+    event.target.disabled = true;
+    hint.textContent = wanted ? '正在关闭遥测…（要管理员权限）' : '正在恢复遥测…';
+    let answer = null;
+    try {
+      answer = await api().set_telemetry_disabled(wanted);
+    } catch (err) {
+      answer = { ok: false, message: String(err) };
+    }
+    event.target.disabled = false;
+    if (answer && !answer.ok) {
+      hint.textContent = '没成功：' + (answer.message || '');
+    }
+    // Read the state back either way: the machine decides what the
+    // switch shows, not the click.
+    await refreshTelemetry();
   });
 
   $('lockBtn').addEventListener('click', async () => {
