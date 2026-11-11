@@ -235,13 +235,34 @@ jobs:
             }
             Write-Host "the scheduler accepted the $which task"
 
-            # Read it back, so a task that was created wrongly is
-            # noticed here rather than on somebody's machine.
-            $back = & schtasks /Query /TN $testName /XML 2>&1
-            if ($LASTEXITCODE -ne 0) { Write-Error "the $which task cannot be read back"; exit 1 }
-            if ($back -notmatch "RestartOnFailure") {
-              Write-Error "the $which task lost its restart policy"; exit 1
+            # Read it back through the scheduler's own interface, so a
+            # task that was created with the wrong settings is noticed
+            # here rather than on somebody's machine.  Reading the
+            # exported XML would mean looking at text the scheduler
+            # writes in UTF-16, and the values are what matters anyway.
+            $service = New-Object -ComObject Schedule.Service
+            $service.Connect()
+            $task = $service.GetFolder("\").GetTask($testName)
+            $settings = $task.Definition.Settings
+
+            if ($settings.RestartCount -ne 10) {
+              Write-Error "the $which task has RestartCount $($settings.RestartCount), not 10"
+              exit 1
             }
+            if ($settings.RestartInterval -ne "PT1M") {
+              Write-Error "the $which task restarts after $($settings.RestartInterval), not PT1M"
+              exit 1
+            }
+            if ($settings.ExecutionTimeLimit -ne "PT0S") {
+              Write-Error "the $which task is killed after $($settings.ExecutionTimeLimit)"
+              exit 1
+            }
+            if ($settings.StopIfGoingOnBatteries) {
+              Write-Error "the $which task stops when the machine goes onto the battery"
+              exit 1
+            }
+            Write-Host ("the $which task keeps: restart {0} x {1}, no time limit, battery ok" -f
+              $settings.RestartCount, $settings.RestartInterval)
 
             & schtasks /Delete /TN $testName /F | Out-Null
           }
