@@ -33,6 +33,12 @@ def is_frozen() -> bool:
     return bool(getattr(sys, "frozen", False))
 
 
+#: The directory that was chosen, once it has been chosen.  Looking
+#: for it means writing a probe file, and the answer cannot change
+#: while this process runs - so it is worked out once.
+_CHOSEN: Path | None = None
+
+
 def app_dir() -> Path:
     """The directory holding the config, the log and the runtime state.
 
@@ -47,22 +53,30 @@ def app_dir() -> Path:
     directory is checked, and a directory that cannot be written to is
     left alone in favour of the user's own.
     """
+    global _CHOSEN
+    if _CHOSEN is not None:
+        return _CHOSEN
+
     override = os.environ.get("WINSLEEP_HOME")
     if override:
-        return Path(override).expanduser().resolve()
+        _CHOSEN = Path(override).expanduser().resolve()
+        return _CHOSEN
 
     if is_frozen():
         program_data = os.environ.get("ProgramData")
         if program_data:
             candidate = Path(program_data) / "DeepSleepForWindows"
             if _is_writable(candidate):
-                return candidate
+                _CHOSEN = candidate
+                return _CHOSEN
 
     local = os.environ.get("LOCALAPPDATA")
     if local:
-        return Path(local) / "DeepSleepForWindows"
+        _CHOSEN = Path(local) / "DeepSleepForWindows"
+        return _CHOSEN
 
-    return Path.home() / ".deepsleep-for-windows"
+    _CHOSEN = Path.home() / ".deepsleep-for-windows"
+    return _CHOSEN
 
 
 def _is_writable(directory: Path) -> bool:
