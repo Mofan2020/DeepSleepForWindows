@@ -35,6 +35,7 @@ __all__ = [
     "keep_awake",
     "release_execution_state",
     "lock_workstation",
+    "notification_area_ready",
     "is_supported",
 ]
 
@@ -281,6 +282,53 @@ def lock_workstation() -> bool:
     try:
         return bool(_user32().LockWorkStation())
     except (OSError, AttributeError):
+        return False
+
+
+# -------------------------------------------------------- notification area
+
+
+def notification_area_ready() -> bool:
+    """True when the taskbar notification area exists and can take icons.
+
+    ``Shell_NotifyIcon(NIM_ADD, ...)`` returns zero when there is no
+    notification area to add to, and it says nothing about why.  The
+    two windows it needs are checked by name before an icon is added:
+
+    * ``Shell_TrayWnd`` - the taskbar itself;
+    * ``TrayNotifyWnd`` - the little window inside it that holds icons.
+
+    Both are found with ``FindWindow`` rather than by asking anything
+    else, so this works the same on every language of Windows.
+
+    ``FindWindow`` returns a pointer-sized handle.  The result type has
+    to be declared, otherwise ``ctypes`` assumes a C ``int`` and
+    truncates the handle on 64-bit Windows - the non-zero check would
+    then be right by accident, and the pointer unusable.
+    """
+    if not is_supported():
+        return False
+
+    try:
+        user32 = _user32()
+        find_window = user32.FindWindowW
+        find_window.restype = wintypes.HWND
+        find_window.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+
+        find_child = user32.FindWindowExW
+        find_child.restype = wintypes.HWND
+        find_child.argtypes = [
+            wintypes.HWND,
+            wintypes.HWND,
+            wintypes.LPCWSTR,
+            wintypes.LPCWSTR,
+        ]
+
+        taskbar = find_window("Shell_TrayWnd", None)
+        if not taskbar:
+            return False
+        return bool(find_child(taskbar, None, "TrayNotifyWnd", None))
+    except (OSError, AttributeError, ValueError):
         return False
 
 

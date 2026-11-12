@@ -554,3 +554,60 @@ XML 文件必须 UTF-16（调度器只认这个）。所以 `task-xml --write PA
 实际踩到的表现：后台挂了一次变异测试没管，后来又跑了一次，第二次报「38/39，任务没启动没被抓」，而单独顺序跑是「39/39」。两个结论的前提都是错的。
 
 现在脚本用 `.mutation-lock` 互斥：拿不到锁就打印对方 pid 并 exit 3。锁里写 pid，进程还活着就等；进程没了（上次被 kill）就接管。
+
+
+## 托盘图标不出现的真正原因（v0.4.1）
+
+用户第二次报「菜单栏还是不显示」。前面 v0.3.x 修过两轮：任务没装上、ONLOGON 要等下次登录。这次不是那两个。
+
+### 根因：pystray 把返回值丢了
+
+`pystray/_win32.py` 的 `_message()`：
+
+```python
+win32.Shell_NotifyIcon(code, win32.NOTIFYICONDATAW(...))
+```
+
+返回值没接。`Shell_NotifyIcon(NIM_ADD, ...)` 返回 0 表示失败——托盘区还没建好、或者 Explorer 重启过把图标全清了。pystray 不抛、不重试、不打日志。**进程活着、心跳在写、图标就是没有。**
+
+两个触发场景：
+
+- 任务是 `ONLOGON` 触发的，登录过程中 Explorer 画托盘区比任务启动晚。每次登录都输这个竞态，输一次整个会话就没图标。
+- Explorer 重启（崩溃或手动重启）会销毁全部托盘图标。不响应 `TaskbarCreated` 广播的程序再也回不来，pystray 不响应。
+
+### 修法
+
+- 加图标**之前**等托盘区存在：`FindWindowW("Shell_TrayWnd")` + `FindWindowExW(..., "TrayNotifyWnd", ...)`，最多等 60 秒，超时照常加（任务栏坏了值得看一眼，但不是不给程序的理由）。
+- 起来之后用 `watch_notification_area()` 盯着：区域消失再出现时，用 `icon.visible = False` / `True` 一对赋值强制 `NIM_DELETE` + `NIM_ADD`。这是 pystray 的公开属性，没碰私有成员。只设 `True` 没用——pystray 自己认为图标还在，会短路掉。
+- `FindWindow` 的 `restype` 必须声明成 `wintypes.HWND`。不声明 ctypes 按 C `int` 截断 64 位句柄，「非零」判断只是碰巧对，句柄本身不能用。
+
+### 顺带修的：心跳只写一次
+
+`_cmd_tray` 启动时写一次 `tray.alive`，然后 `icon.run()` 一直阻塞。`HEARTBEAT_SECONDS = 20`，所以**图标明明在，20 秒后所有问「托盘在不在」的地方都答不在**。现在由监视线程每 5 秒写一次，退出时删掉文件让状态立刻翻转。
+
+### 没验证的
+
+改的是 Windows 专用路径，没有真机。逻辑依据是 pystray 源码里那句丢掉返回值的 `Shell_NotifyIcon`，以及 `visible` setter 的短路行为——都能在源码里读到，但没在 Windows 上跑过。
+
+
+## 变异测试的三个新坑（v0.4.1）
+
+### 1. pytest 参数不对 → exit=4 被当成「抓到了」
+
+第一轮变异跑完报「4/4 全抓到」，其实每一条都是 `exit=4`——pytest 的**用法错误**，因为 `--timeout` 这个参数没装插件，测试根本没跑起来。非零退出码被当成了「测试红了」。
+
+修法：变异之前先跑一次基线，**基线必须 exit 0**，否则后面的结论全无意义。退出码要和「跑起来了但失败」区分开。
+
+### 2. 循环终止条件依赖被变异的东西 → 挂死
+
+几个监视线程的用例靠 `beat` 回调来 `stop.set()`。去掉心跳的变异等于同时去掉了唯一的终止条件，`watch_notification_area` 无限循环，pytest 挂到超时被杀。
+
+教训：**循环的终止条件不能来自被测试对象内部**。现在全部改成由 `ready()` 计数置停，去掉心跳时是干净地断言失败。
+
+### 3. 被 kill 的变异跑会留源码残留
+
+第一次变异跑在 300 秒处被强杀，`finally` 没执行，源码里留下两条变异（`return True` 提前返回、`if False` 替掉心跳）。之后所有测试结论都不可信。
+
+处置：kill 之后立刻 `grep` 变异特征 + `git status`。这次是手动找到两处残留逐个还原的——其中一处还原时又把 `if ready():` 套成了两层导致 IndentationError，说明**还原操作本身也要验证**（改完立刻跑测试，别只看 diff）。
+
+脚本层面的正确做法是把「原始内容」写进 journal 文件，下次启动先对账；这个项目已有的 `.mutation-journal.json` 就是干这个的，但这次是临时写的内联脚本，绕过了它。

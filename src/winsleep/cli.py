@@ -217,13 +217,21 @@ def _cmd_tray(_args: argparse.Namespace) -> int:
     def _quit() -> None:
         log.info("the program was left from the notification area")
 
+    def _beat() -> None:
+        install.write_heartbeat(install.TRAY_HEARTBEAT)
+
     def _plans() -> list[tuple[str, str]]:
         return winpower.list_plans()
 
     def _switch(guid: str) -> None:
         winpower.set_active_plan(guid)
 
-    return tray.run_tray(_show, _lock, _quit, _plans, _switch)
+    try:
+        return tray.run_tray(_show, _lock, _quit, _plans, _switch, heartbeat=_beat)
+    finally:
+        # The icon is gone now, so the answer to "is the tray there?"
+        # has to change at once rather than twenty seconds later.
+        install.clear_heartbeat(install.TRAY_HEARTBEAT)
 
 
 def _open_gui_copy() -> None:

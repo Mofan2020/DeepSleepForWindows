@@ -452,6 +452,18 @@ def write_heartbeat(name: str = AGENT_HEARTBEAT) -> None:
         log.debug("could not write the heartbeat: %s", exc)
 
 
+def clear_heartbeat(name: str = AGENT_HEARTBEAT) -> None:
+    """Remove the heartbeat so "is it running?" answers no straight away.
+
+    Waiting for a heartbeat to go stale means the window keeps saying
+    "running" for up to twenty seconds after the thing has stopped.
+    """
+    try:
+        (heartbeat_path().parent / name).unlink()
+    except OSError:
+        pass
+
+
 def _heartbeat_is_fresh(name: str = AGENT_HEARTBEAT) -> bool:
     """True when a heartbeat file was written recently enough.
 
