@@ -361,6 +361,14 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           NOTES="release-notes.md"
           test -f "$NOTES" || { echo "::error::release-notes.md is missing"; exit 1; }
+          # The whole file is the release body, so it has to be **this**
+          # version's notes.  A forgotten rewrite would republish the last
+          # release's text under the new tag, which nobody notices until a
+          # reader points out the version does not match.
+          grep -q "${TAG#v}" "$NOTES" || {
+            echo "::error::$NOTES does not mention $TAG - rewrite it for this release"
+            exit 1
+          }
           # Every tag publishes as a prerelease.  A version the maintainer
           # has not tested by hand stays a prerelease on purpose.
           gh release create "$TAG" \
