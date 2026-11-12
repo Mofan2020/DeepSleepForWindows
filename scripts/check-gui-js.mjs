@@ -71,6 +71,7 @@ const code = [
   extract('renderOverview'),
   extract('renderGuardCards'),
   extract('fillPlanSelect'),
+  extract('fillPlanSelectByGuid'),
   extract('renderRules'),
   extract('renderGames'),
   extract('renderService'),
@@ -459,6 +460,85 @@ test('nothing is filled in when the action is not a plan switch', () => {
   );
 
   assert.strictEqual(vm.runInContext('this.__sync()', scope), false);
+});
+
+/* ------------------------------------------- the plan editor's dropdown */
+
+/* A select that behaves like the real one for this purpose: writing
+ * innerHTML clears the options, appendChild adds one. */
+function editorSelect() {
+  return {
+    options: [],
+    value: '',
+    set innerHTML(value) {
+      if (value === '') this.options = [];
+    },
+    get innerHTML() {
+      return '';
+    },
+    appendChild(option) {
+      this.options.push(option);
+    },
+  };
+}
+
+/* Windows lets two plans carry the same name (duplicating "平衡" does
+ * it).  The editor used to put the **name** in the option value, so two
+ * such plans were indistinguishable: picking the second one looked like
+ * nothing happened.  The identity of a plan is its guid. */
+test('two plans with the same name are told apart by their guid', () => {
+  const select = editorSelect();
+  const scope = vm.createContext({
+    ...context,
+    document: { createElement: (tag) => ({ tag, value: '', textContent: '' }) },
+  });
+  vm.runInContext(`${code}\nthis.__fill = fillPlanSelectByGuid;`, scope);
+  Object.assign(scope, {
+    __sel: select,
+    __plans: ['平衡', '平衡'],
+    __guids: ['guid-a', 'guid-b'],
+    __want: 'guid-b',
+  });
+  vm.runInContext('this.__fill(__sel, __plans, __guids, __want)', scope);
+
+  assert.deepStrictEqual(
+    select.options.map((option) => option.value),
+    ['guid-a', 'guid-b'],
+    '选项的 value 必须是 GUID，不是名字',
+  );
+  assert.deepStrictEqual(
+    select.options.map((option) => option.textContent),
+    ['平衡', '平衡'],
+    '给用户看的仍然是名字',
+  );
+  assert.strictEqual(select.value, 'guid-b', '选中的那个要真的被选中');
+});
+
+test('the editor dropdown is not rebuilt while the list is unchanged', () => {
+  const select = editorSelect();
+  select.options = [
+    { value: 'guid-a', textContent: '平衡' },
+    { value: 'guid-b', textContent: '节能' },
+  ];
+  select.value = 'guid-b';
+  const scope = vm.createContext({
+    ...context,
+    document: { createElement: (tag) => ({ tag, value: '', textContent: '' }) },
+  });
+  vm.runInContext(`${code}\nthis.__fill = fillPlanSelectByGuid;`, scope);
+  Object.assign(scope, {
+    __sel: select,
+    __plans: ['平衡', '节能'],
+    __guids: ['guid-a', 'guid-b'],
+    __want: 'guid-b',
+  });
+  vm.runInContext('this.__fill(__sel, __plans, __guids, __want)', scope);
+
+  // refresh() runs every 5 seconds; rebuilding the list would close a
+  // dropdown the user has open and move the selection.
+  assert.strictEqual(select.options.length, 2);
+  assert.strictEqual(select.options[0].textContent, '平衡');
+  assert.strictEqual(select.value, 'guid-b');
 });
 
 /* ------------------------------------------------------------- report */

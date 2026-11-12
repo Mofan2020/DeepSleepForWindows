@@ -206,6 +206,27 @@ def start_tray() -> tuple[bool, str]:
     return True, "the tray was started"
 
 
+def ensure_tray_running() -> tuple[bool, str]:
+    """Make sure the icon in the notification area is there right now.
+
+    The tray is its own process, started by a scheduled task at logon.
+    That leaves exactly one hole: the task is registered during install
+    and then nothing starts it until the next logon - so for anyone who
+    does not log off, the icon never appears at all.  (``start_tray``
+    existed but nothing called it.)
+
+    Safe to call from the window on every start: it answers "already
+    running" without touching anything when the heartbeat is fresh.
+    """
+    if tray_running():
+        return True, "already running"
+    if not task_exists(TRAY_TASK):
+        ok, detail = install_tray_task()
+        if not ok:
+            return False, detail
+    return start_tray()
+
+
 def start_agent() -> tuple[bool, str]:
     """Start the agent task right now."""
     result = _run(["schtasks", "/Run", "/TN", AGENT_TASK])

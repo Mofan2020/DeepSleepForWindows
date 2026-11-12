@@ -409,3 +409,93 @@ def test_the_tray_menu_carries_the_hold_entries(monkeypatch):
     ][0]
     cancel.action()
     assert calls == [30, 0]
+
+
+# ------------------------------------------------------------------ 界面表
+
+def test_every_power_group_has_a_label_in_the_interface() -> None:
+    """每个电源设置分组都要有中文标题。
+
+    **这条抓的是一整类 bug，不是一个。** `app.js` 里的 `GROUP_LABELS`
+    曾经用 `SUB_VIDEO` 这种符号名当 key，而设置项带回来的 `row.group`
+    是 Windows 的组 GUID 字符串——两边永远对不上，界面上显示的就是
+    一串裸 GUID，用户看到的是一堆「莫名其妙的 UUID」。
+
+    所以这里直接读两个源文件对账：`powersettings.GROUPS` 里的每个组
+    GUID 都必须能在 `GROUP_LABELS` 里找到。
+    """
+    import re
+    from pathlib import Path
+
+    from winsleep.core import powersettings
+
+    wanted = {group for group, _ in powersettings.GROUPS}
+    assert wanted, "GROUPS 是空的，这条测试等于没测"
+
+    app_js = (
+        Path(__file__).resolve().parents[1]
+        / "src" / "winsleep" / "gui" / "assets" / "app.js"
+    ).read_text(encoding="utf-8")
+    block = re.search(r"const GROUP_LABELS = \{[\s\S]*?\};", app_js)
+    assert block is not None, "app.js 里找不到 GROUP_LABELS"
+    keys = set(re.findall(r"'([0-9a-f-]{36})'\s*:", block.group(0)))
+
+    missing = sorted(wanted - keys)
+    assert not missing, f"这些分组在界面上没有标题，会显示成裸 GUID：{missing}"
+
+
+# ------------------------------------------------------------ 托盘能不能起来
+
+def test_the_tray_is_started_when_it_is_not_running(monkeypatch) -> None:
+    """窗口启动时要把托盘叫起来。
+
+    托盘是独立进程，计划任务只在**登录时**触发一次。装完之后不注销
+    就一直没图标——`start_tray()` 早就写好了，但没有任何地方调用它。
+    """
+    from winsleep.core import install
+
+    calls: list[str] = []
+    monkeypatch.setattr(install, "tray_running", lambda: False)
+    monkeypatch.setattr(install, "task_exists", lambda name: True)
+    monkeypatch.setattr(
+        install, "start_tray", lambda: (calls.append("start"), (True, "started"))[1]
+    )
+
+    ok, _detail = install.ensure_tray_running()
+    assert ok is True
+    assert calls == ["start"], "没在跑却没去启动它"
+
+
+def test_the_tray_is_not_started_twice(monkeypatch) -> None:
+    """已经在跑就什么都不做——否则会出现两个图标。"""
+    from winsleep.core import install
+
+    calls: list[str] = []
+    monkeypatch.setattr(install, "tray_running", lambda: True)
+    monkeypatch.setattr(
+        install, "start_tray", lambda: (calls.append("start"), (True, "started"))[1]
+    )
+
+    ok, detail = install.ensure_tray_running()
+    assert ok is True
+    assert detail == "already running"
+    assert calls == [], "已经在跑还去启动了一次"
+
+
+def test_the_tray_task_is_registered_before_it_is_started(monkeypatch) -> None:
+    """任务没注册过要先注册，不然 start_tray 只会回一句「还没装」。"""
+    from winsleep.core import install
+
+    calls: list[str] = []
+    monkeypatch.setattr(install, "tray_running", lambda: False)
+    monkeypatch.setattr(install, "task_exists", lambda name: False)
+    monkeypatch.setattr(
+        install, "install_tray_task", lambda: (calls.append("register"), (True, "ok"))[1]
+    )
+    monkeypatch.setattr(
+        install, "start_tray", lambda: (calls.append("start"), (True, "started"))[1]
+    )
+
+    ok, _detail = install.ensure_tray_running()
+    assert ok is True
+    assert calls == ["register", "start"], calls

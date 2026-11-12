@@ -94,6 +94,20 @@ def run() -> int:
         log.info("there is already a window; this copy gives up")
         return 0
 
+    # The icon in the notification area is a separate process.  Nothing
+    # else starts it outside of a logon, so it is asked for here - a
+    # failure only costs the icon, the window still opens.
+    try:
+        from ..core import install as install_mod
+
+        tray_ok, tray_detail = install_mod.ensure_tray_running()
+        if tray_ok:
+            log.info("the notification area icon is running")
+        else:
+            log.warning("the notification area icon did not start: %s", tray_detail)
+    except Exception as exc:  # noqa: BLE001 - the window outranks the icon
+        log.warning("the notification area icon did not start: %s", exc)
+
     bridge = Bridge()
     window = webview.create_window(
         WINDOW_TITLE,

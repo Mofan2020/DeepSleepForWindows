@@ -668,3 +668,56 @@ daemon 每 tick 重读配置，所以窗口只写配置，不需要走 IPC。
 - **托盘菜单没加"暂停守护"**。想了一下它和"保持唤醒"语义重叠——用户说的通常是"别切我的计划一会儿"，那是第三个概念（临时锁住计划），不是保持唤醒。硬塞进这个菜单会让人分不清。留到下一版单独设计。
 - **日志不能导出**。加了搜索和级别过滤，导出要决定格式和落盘位置，不急。
 - **没有真实的 Windows 机器验证**。托盘菜单、电源计划读写、遥测开关都只能在 Windows 上验。自动化测试跑在 macOS 上（假 pystray、假 DOM），验证的是逻辑不是系统调用。
+
+
+## 0.5.0 之后修的四条（真机反馈）
+
+### OverflowError: int too long to convert
+
+提权安装走 `ShellExecuteExW` + `SEE_MASK_NOCLOSEPROCESS`，拿到 `hProcess` 之后
+`WaitForSingleObject(hProcess, ...)`。听起来天经地义，错在两处：
+
+1. `info.hProcess` 是 `c_void_p` 字段，从 ctypes 结构体读出来是**普通 Python
+   int**——64 位句柄能到 1e18；
+2. `WaitForSingleObject` / `CloseHandle` 没声明 `argtypes`，ctypes 默认按 C 的
+   `int` 处理，于是第一个参数直接抛 `OverflowError: int too long to convert`。
+
+**所有拿句柄做参数的 Win32 调用都要显式声明 `argtypes = [c_void_p, ...]`。**
+不声明的默认行为在 32 位上刚好能用，64 位上必炸——这也是这类 bug 只在用户
+机器上出现的原因。
+
+### 分组标题显示成裸 GUID
+
+`app.js` 的 `GROUP_LABELS` 用 `SUB_VIDEO` 这种符号名当 key，而设置项带回来的
+`row.group` 是**组 GUID 字符串**（`7516b95f-f776-...`）。查不到就落到
+`|| row.group`，界面上把 GUID 原样显示出来。
+
+改成 GUID 当键，十个组全补上；认不出的组显示「其他设置」——分组名缺失是程序
+的事，不该让用户去读 GUID。
+
+**这类错误靠人眼对账靠不住**（两边一个是符号名一个是 GUID，看着都像标识符），
+所以加了一条 pytest：读 `powersettings.GROUPS` 和 `app.js`，逐组核对有没有标题。
+
+### 换计划时下面不刷新
+
+下拉框的 option value 原来是**计划名字**：
+
+- Windows 允许重名（复制「平衡」就有了两个「平衡」），两个同名计划在框里分不开；
+- 反过来用 `plans.indexOf(name)` 找回 GUID，重名时永远返回第一个。
+
+于是「切到第二个同名计划」这个操作在界面上等于没反应。改成 value 是 GUID、
+显示是名字，并且列表没变就不重建（`refresh()` 5 秒一次，重建会把用户正打开着
+的下拉框关掉、选中项也会跳）。
+
+### 托盘不出现
+
+`install_tray_task()` 只注册了**登录时触发**的计划任务；`start_tray()` 写好了
+却没有一个调用点。所以装完之后，只要不注销重登，图标永远不会出现。
+
+现在窗口启动时调 `ensure_tray_running()`：已经在跑就返回，没跑就先注册任务再
+`schtasks /Run`。托盘进程自己加单例锁（`tray.lock`），避免窗口和计划任务同时
+拉起来变成两个图标。
+
+**教训**：写了「启动某件事」的函数，一定要有调用点。`start_tray` 这种名字让人
+以为它在某处被调用了，实际上 grep 一下才发现是死代码。
+

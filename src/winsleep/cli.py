@@ -230,7 +230,17 @@ def _cmd_hold(args: argparse.Namespace) -> int:
 
 def _cmd_tray(_args: argparse.Namespace) -> int:
     """Stay in the notification area without showing a window."""
-    from .core import install, tray, winapi, winpower
+    from .core import install, single, tray, winapi, winpower
+
+    # **Only one tray, ever.**  The window asks for the icon on every
+    # start, and the task scheduler can also start one; two copies would
+    # mean two icons in the area, and the second one is the one the user
+    # clicks when he wants to close it.
+    lock = single.SingleInstance(single.lock_path().with_name("tray.lock"))
+    lock.acquire()
+    if not lock.is_first:
+        log.info("there is already a tray icon; this copy exits")
+        return 0
 
     # Say that the icon is there.  Without this there is no way to tell
     # "the tray is running" from "the task is registered and silently

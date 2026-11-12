@@ -30,15 +30,24 @@ const ACTION_LABELS = {
 /* The subgroups Windows uses for power settings, in the words a person
  * would use.  A GUID that is not here is shown as it came back - better
  * than hiding a setting because its group was not on the list. */
+/* 分组标题按 **组 GUID** 查。
+ *
+ * 这里以前写的是 SUB_VIDEO / SUB_SLEEP 这种符号名，而设置项带回来的
+ * `row.group` 是 Windows 的组 GUID 字符串，两边永远对不上——界面上
+ * 显示的就是一串裸 GUID，「莫名其妙的疑似 UUID 的内容」。
+ *
+ * 键必须跟 core/powersettings.py 里的 GROUP_* 常量逐字一致。 */
 const GROUP_LABELS = {
-  SUB_VIDEO: '显示',
-  SUB_SLEEP: '睡眠',
-  SUB_DISK: '硬盘',
-  SUB_PROCESSOR: '处理器',
-  SUB_BATTERY: '电池',
-  SUB_PCIEXPRESS: 'PCI Express',
-  SUB_BUTTONS: '电源按钮',
-  SUB_NONE: '其他',
+  '7516b95f-f776-4464-8c53-06167f40cc99': '显示',
+  '238c9fa8-0aad-41ed-83f4-97be242c8f20': '睡眠',
+  '0012ee47-9041-4b5d-9b77-535fba8b1442': '硬盘',
+  '54533251-82be-4824-96c1-47b60b740d00': '处理器',
+  '12bbebe6-58d6-4636-95bb-3217ef867c1a': '网络',
+  '2a737441-1930-4402-8d77-b2bebba308a3': 'USB',
+  '19cbb8fa-5279-450e-9fac-8a3d5fede023': '无线适配器',
+  '9596fb26-9850-41fd-ac3e-4c5f8b4e1a2d': '多媒体',
+  '501a4d13-42af-4429-9fd1-a8218c268e20': 'PCI Express',
+  'dab60367-53fe-4fbc-825e-521d069d2456': '显卡',
 };
 
 /* The unit belongs to the label.  A bare number in a rule is a number
@@ -101,10 +110,44 @@ function makeOption(value, label) {
   return option;
 }
 
-function guidOfPlan(name) {
-  const index = (state.plans || []).indexOf(name);
-  if (index < 0) return '';
-  return (state.plan_guids || [])[index] || '';
+/* 编辑器的计划下拉框：**value 是 GUID，显示的是名字。**
+ *
+ * 以前 value 直接放名字，于是：
+ *
+ * 1. Windows 允许两个计划重名（用户复制过「平衡」就会出现），重名的
+ *    那两个在框里分不开，切过去看起来「数据没变」；
+ * 2. 反过来用 `plans.indexOf(name)` 找回 GUID，重名时永远指到第一个。
+ *
+ * 计划的身份是 GUID，名字只是给人看的标签。 */
+function fillPlanSelectByGuid(select, plans, guids, selectedGuid) {
+  const list = plans || [];
+  const ids = guids || [];
+  const options = [];
+  for (let index = 0; index < list.length; index += 1) {
+    const guid = ids[index] || '';
+    if (!guid) continue;
+    options.push([guid, list[index]]);
+  }
+
+  // 列表没变就不重建：refresh() 每 5 秒跑一次，重建会把用户正打开着的
+  // 下拉框关掉，选中项也会跳。
+  const have = Array.from(select.options || []).map((option) => option.value);
+  const same = have.length === options.length
+    && options.every(([guid], index) => have[index] === guid);
+  if (same) {
+    if (selectedGuid) select.value = selectedGuid;
+    return;
+  }
+
+  select.innerHTML = '';
+  for (const [guid, name] of options) {
+    const option = document.createElement('option');
+    option.value = guid;
+    option.textContent = name;
+    if (guid === selectedGuid) option.selected = true;
+    select.appendChild(option);
+  }
+  if (selectedGuid) select.value = selectedGuid;
 }
 
 /* ---------------------------------------------------------- rule form */
@@ -547,7 +590,9 @@ async function renderPlanSettings(guid) {
       groupBox.className = 'setting-group';
       const head = document.createElement('div');
       head.className = 'setting-group-head';
-      head.textContent = GROUP_LABELS[row.group] || row.group || '其他';
+      // **认不出的组别不要显示 GUID。** 用户看不懂，而且会让整个
+      // 面板看起来像坏了——分组名缺失是程序的事，不是让用户去读 GUID。
+      head.textContent = GROUP_LABELS[row.group] || '其他设置';
       groupBox.appendChild(head);
       box.appendChild(groupBox);
     }
@@ -1084,9 +1129,13 @@ async function refresh() {
   syncActionPlanOptions();
 
   const editSelect = $('editPlanSelect');
-  const wanted = config.last_plan_guid || data.active_plan_guid || '';
-  const current = editSelect.value;
-  fillPlanSelect(editSelect, plans, current || wanted);
+  // 编辑器选中的是 GUID：先保住用户当前选的那个，没有才退回「上次用的」
+  // 和「正在生效的」。
+  const wantedGuid = editSelect.value
+    || config.last_plan_guid
+    || data.active_plan_guid
+    || '';
+  fillPlanSelectByGuid(editSelect, plans, data.plan_guids || [], wantedGuid);
 
   let service = null;
   try {
@@ -1395,13 +1444,13 @@ function wire() {
   });
 
   $('editPlanSelect').addEventListener('change', async (event) => {
-    const guid = guidOfPlan(event.target.value);
+    const guid = event.target.value;
     await api().save_config({ last_plan_guid: guid });
     await renderPlanSettings(guid);
   });
 
   $('duplicatePlanBtn').addEventListener('click', async () => {
-    const guid = guidOfPlan($('editPlanSelect').value);
+    const guid = $('editPlanSelect').value;
     if (!guid) {
       $('planSaveHint').textContent = '先选一个计划';
       return;
@@ -1414,7 +1463,7 @@ function wire() {
   });
 
   $('deletePlanBtn').addEventListener('click', async () => {
-    const guid = guidOfPlan($('editPlanSelect').value);
+    const guid = $('editPlanSelect').value;
     if (!guid) return;
     const result = await api().delete_plan(guid);
     $('planSaveHint').textContent = result.ok ? '删掉了' : (result.message || '删除失败');
@@ -1423,7 +1472,7 @@ function wire() {
   });
 
   $('restorePlanBtn').addEventListener('click', async () => {
-    const guid = guidOfPlan($('editPlanSelect').value);
+    const guid = $('editPlanSelect').value;
     if (!guid) return;
     if (!window.confirm('把这个计划恢复成 Windows 默认的设置？')) return;
     const result = await api().restore_plan(guid);
@@ -1447,7 +1496,7 @@ function wire() {
   });
 
   $('savePlanBtn').addEventListener('click', async () => {
-    const guid = guidOfPlan($('editPlanSelect').value);
+    const guid = $('editPlanSelect').value;
     const changes = Object.values(planChanges);
     if (changes.length === 0) return;
     const result = await api().save_plan_settings(guid, changes);
@@ -1710,8 +1759,7 @@ function renderOverviewFeed() {
 window.addEventListener('pywebviewready', () => {
   wire();
   refresh().then(() => {
-    const guid = guidOfPlan($('editPlanSelect').value);
-    renderPlanSettings(guid);
+    renderPlanSettings($('editPlanSelect').value);
     // The overview shows the tail of the log, and the log is only read
     // while its own page is open.  Read it once at startup so the feed
     // is not empty until the user visits the log page.

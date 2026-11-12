@@ -106,11 +106,27 @@ def _run_elevated_command(command: str, timeout_seconds: int = 120) -> dict[str,
 
     if info.hProcess:
         # Wait for the elevated process to finish.
+        #
+        # **这两个函数必须声明 argtypes。** `info.hProcess` 是
+        # c_void_p 字段，从 ctypes 结构体里读出来是一个**普通的
+        # Python int**（64 位句柄能到 1e18 量级）。不声明 argtypes 的话
+        # ctypes 按 C 的 `int` 处理第一个参数，直接抛
+        #
+        #     argument 1: OverflowError: int too long to convert
+        #
+        # 提权流程就断在这儿：UAC 已经点了「是」，进程起来了，可这边
+        # 崩了，界面上只看到一句 OverflowError。
+        kernel32 = ctypes.windll.kernel32
+        kernel32.WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+        kernel32.WaitForSingleObject.restype = ctypes.c_uint
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_int
+
         WAIT_TIMEOUT = 0x00000102
-        result = ctypes.windll.kernel32.WaitForSingleObject(
-            info.hProcess, timeout_seconds * 1000
+        result = kernel32.WaitForSingleObject(
+            ctypes.c_void_p(info.hProcess), timeout_seconds * 1000
         )
-        ctypes.windll.kernel32.CloseHandle(info.hProcess)
+        kernel32.CloseHandle(ctypes.c_void_p(info.hProcess))
         if result == WAIT_TIMEOUT:
             return {"ok": False, "message": "安装超时，请重试"}
 
