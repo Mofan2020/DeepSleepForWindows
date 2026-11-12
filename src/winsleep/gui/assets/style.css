@@ -125,9 +125,9 @@ body {
 }
 
 .app {
-  max-width: 940px;
+  max-width: 1020px;
   margin: 0 auto;
-  padding: 20px 20px 44px;
+  padding: 20px 22px 44px;
 }
 
 /* ----------------------------------------------------------------- header */
@@ -139,7 +139,7 @@ body {
   gap: 16px;
   padding: 13px 18px;
   border-radius: var(--radius);
-  margin-bottom: 14px;
+  margin-bottom: 10px;
 }
 
 .brand { display: flex; align-items: center; gap: 10px; }
@@ -166,12 +166,51 @@ body {
   background: var(--muted);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 18%, transparent);
   transition: background .2s, box-shadow .2s;
+  flex-shrink: 0;
 }
 .dot.on   { background: var(--ok);     box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent); }
 .dot.off  { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent); }
+.dot.warn { background: var(--warn);   box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 18%, transparent); }
+.dot.small { width: 7px; height: 7px; box-shadow: none; }
 
 .meta { color: var(--muted); font-size: 13px; white-space: nowrap; }
 .meta .sep { margin: 0 6px; opacity: .5; }
+
+/* ------------------------------------------------------- the service strip */
+/* One line when everything is fine.  A background service that works does
+ * not deserve a third of the window. */
+
+.strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px;
+  border-radius: 14px;
+  margin-bottom: 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.strip-text {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.strip-hint {
+  color: var(--muted);
+  opacity: .78;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.strip-hint:empty { display: none; }
+
+.strip-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.strip-actions .btn { padding: 4px 11px; font-size: 12.5px; }
 
 /* ------------------------------------------------------------------ panes */
 
@@ -201,7 +240,7 @@ body {
 .muted {
   color: var(--muted);
   font-size: 12.5px;
-  margin: 0 0 12px;
+  margin: 0;
   font-weight: 450;
 }
 
@@ -234,6 +273,103 @@ body {
   box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
 }
 
+/* -------------------------------------------------------------------- hero */
+
+.hero {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  padding: 20px 22px;
+  border-radius: var(--radius);
+  margin-bottom: 14px;
+}
+
+.hero-main { flex: 1 1 auto; min-width: 0; }
+
+.hero-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+
+.hero-value {
+  font-size: 27px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  line-height: 1.2;
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
+}
+
+.hero-why {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.hero-why:empty { margin-bottom: 0; }
+
+.hero-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.hero-chips:empty { display: none; }
+
+.hero-side {
+  flex-shrink: 0;
+  width: 148px;
+  text-align: center;
+}
+
+.idle-num {
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.idle-cap {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.idle-track {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  margin: 9px 0 6px;
+}
+
+.idle-fill {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #5eead4));
+  transition: width .5s ease;
+}
+
+/* ------------------------------------------------------------------- pills */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--field);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.pill.on    { color: var(--ok);    border-color: color-mix(in srgb, var(--ok) 40%, transparent);    background: color-mix(in srgb, var(--ok) 12%, transparent); }
+.pill.warn  { color: var(--warn);  border-color: color-mix(in srgb, var(--warn) 40%, transparent);  background: color-mix(in srgb, var(--warn) 12%, transparent); }
+.pill.bad   { color: var(--danger);border-color: color-mix(in srgb, var(--danger) 40%, transparent);background: color-mix(in srgb, var(--danger) 12%, transparent); }
+.pill.accent{ color: var(--accent);border-color: color-mix(in srgb, var(--accent) 40%, transparent);background: var(--accent-soft); }
+
 /* ------------------------------------------------------------------ cards */
 
 .cards {
@@ -243,9 +379,21 @@ body {
   margin-bottom: 14px;
 }
 
+/* A fixed count beats auto-fit whenever the cards have to line up: with
+ * four cards and three columns the fourth one sits alone on a row with
+ * two empty cells, which reads as a mistake. */
+.cards.two   { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.cards.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+@media (max-width: 720px) {
+  .cards.two, .cards.three { grid-template-columns: minmax(0, 1fr); }
+}
+
 .card {
   border-radius: var(--radius);
   padding: 15px 17px;
+  display: flex;
+  flex-direction: column;
 }
 
 .card-label {
@@ -260,7 +408,7 @@ body {
   font-size: 19px;
   font-weight: 600;
   letter-spacing: -0.02em;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
   overflow-wrap: anywhere;
 }
 
@@ -270,6 +418,8 @@ body {
   align-items: center;
   gap: 8px;
 }
+
+.card .hint { margin-top: 8px; }
 
 /* ------------------------------------------------------------------ forms */
 
@@ -287,7 +437,7 @@ body {
 .text { flex: 1 1 150px; }
 .text.wide { flex: 1 1 100%; width: 100%; margin: 10px 0; }
 .num { width: 84px; }
-.select { cursor: pointer; }
+.select { cursor: pointer; max-width: 240px; }
 
 .text:focus, .num:focus, .select:focus {
   outline: none;
@@ -326,6 +476,7 @@ body {
 .btn.primary:hover { filter: brightness(1.07); }
 
 .btn.ghost { background: transparent; }
+.btn.small { padding: 4px 11px; font-size: 12.5px; }
 
 .switch {
   display: inline-flex;
@@ -350,6 +501,7 @@ body {
 }
 .hint.ok  { color: var(--ok); }
 .hint.bad { color: var(--danger); }
+.hint.warn { color: var(--warn); }
 
 .toolbar, .row-actions {
   display: flex;
@@ -358,13 +510,32 @@ body {
   gap: 8px;
 }
 
+/* --------------------------------------------------------------- the feed */
+
+.feed {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  font: 12px/1.6 ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color: var(--muted);
+}
+
+.feed-line {
+  padding: 3px 8px;
+  border-radius: 7px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-left: 2px solid transparent;
+}
+.feed-line.warn  { border-left-color: var(--warn); }
+.feed-line.error { border-left-color: var(--danger); color: color-mix(in srgb, var(--danger) 80%, var(--text)); }
+
 /* ------------------------------------------------------------------ rules */
 
 .rules {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-bottom: 14px;
 }
 
 .rule {
@@ -378,21 +549,53 @@ body {
   transition: opacity .2s ease;
 }
 .rule.disabled { opacity: .5; }
-.rule-name { font-weight: 500; }
-.rule-cond { color: var(--muted); font-size: 12.5px; }
+.rule-name { font-weight: 500; flex-shrink: 0; }
+.rule-cond {
+  color: var(--muted);
+  font-size: 12.5px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .rule-action {
-  margin-left: auto;
   color: var(--accent);
   font-size: 12.5px;
   white-space: nowrap;
+  flex-shrink: 0;
+}
+.rule-pri {
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 6px;
+  flex-shrink: 0;
 }
 
 .rule-form {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   padding-top: 14px;
   border-top: 1px solid var(--border);
+}
+
+.rule-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* A button is as wide as its text.  Inside a column this is not the
+ * default, and a full-width "再加一条条件" reads like a primary action. */
+.rule-section > .btn { align-self: flex-start; }
+
+.rule-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
 }
 
 .rule-block {
@@ -401,12 +604,13 @@ body {
   gap: 8px;
   flex-wrap: wrap;
 }
+.rule-block.tight { gap: 6px; }
 
 .rule-label {
   font-size: 12px;
   font-weight: 600;
   color: var(--muted);
-  width: 34px;
+  width: 46px;
   flex-shrink: 0;
 }
 
@@ -417,6 +621,42 @@ body {
   flex: 1 1 240px;
   min-width: 0;
 }
+
+.cond-list { display: flex; flex-direction: column; gap: 6px; }
+
+.cond-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  background: var(--field);
+  border: 1px solid var(--border);
+}
+
+.cond-row .cond-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+.cond-del {
+  font: inherit;
+  width: 22px; height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  margin-left: auto;
+}
+.cond-del:hover { background: var(--danger); color: #fff; }
 
 .day-row { display: flex; gap: 4px; flex-wrap: wrap; }
 .day {
@@ -438,7 +678,11 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-bottom: 12px;
+}
+.chips:empty::after {
+  content: "还没有添加。";
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .chip {
@@ -475,6 +719,22 @@ body {
   gap: 2px;
 }
 
+/* The settings are grouped: display, sleep, disk, processor.  A flat list
+ * of eleven rows of numbers gives no clue which ones belong together. */
+.setting-group {
+  margin-top: 6px;
+}
+.setting-group:first-child { margin-top: 0; }
+
+.setting-group-head {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.03em;
+  padding: 4px 2px 6px;
+  border-bottom: 1px solid var(--border);
+}
+
 .setting {
   display: flex;
   align-items: center;
@@ -489,6 +749,21 @@ body {
   font-size: 13.5px;
 }
 
+.setting-value {
+  color: var(--muted);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 2px;
+  border-bottom: 1px solid var(--border);
+}
+.setting-row:last-child { border-bottom: 0; }
+
 .settings-actions {
   display: flex;
   align-items: center;
@@ -498,12 +773,70 @@ body {
   border-top: 1px solid var(--border);
 }
 
+/* ------------------------------------------------------------ own plans */
+
+.own-plans {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+@media (max-width: 720px) {
+  .own-plans { grid-template-columns: minmax(0, 1fr); }
+}
+
+.own-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--field);
+  border: 1px solid var(--border);
+}
+
+.own-plan-name { font-weight: 600; font-size: 13.5px; }
+.own-plan-desc { color: var(--muted); font-size: 12.5px; }
+
 /* ------------------------------------------------------------------- logs */
+
+.log-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.log-toolbar .text { flex: 1 1 200px; }
+
+.seg {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--field);
+  border: 1px solid var(--border);
+}
+
+.seg-item {
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  padding: 4px 11px;
+  cursor: pointer;
+}
+.seg-item.active {
+  color: var(--text);
+  background: var(--glass-strong);
+}
 
 .log {
   margin: 0;
   padding: 12px 14px;
   max-height: 460px;
+  min-height: 120px;
   overflow: auto;
   background: var(--field);
   border: 1px solid var(--border);
@@ -513,7 +846,6 @@ body {
   overflow-wrap: anywhere;
   color: var(--muted);
 }
-.log:empty { display: none; }
 
 /* ------------------------------------------------------------------ sheet */
 
@@ -522,16 +854,20 @@ body {
   inset: 0;
   z-index: 40;
   display: flex;
-
-.sheet-backdrop[hidden] {
-  display: none !important;
-}
   align-items: center;
   justify-content: center;
   padding: 40px 20px;
   background: rgba(8, 11, 18, 0.34);
   backdrop-filter: blur(3px);
   animation: fade .18s ease;
+}
+
+/* This has to be its own rule.  It used to be sitting *inside* the block
+ * above, which ended that block early and threw away the centring, the
+ * dimming and the animation - the picker opened in the top left corner
+ * with no backdrop at all. */
+.sheet-backdrop[hidden] {
+  display: none !important;
 }
 
 .sheet {
@@ -611,6 +947,7 @@ body {
   color: var(--muted);
   font-size: 13px;
   padding: 8px 0;
+  margin: 0;
 }
 
 .foot {
@@ -618,18 +955,3 @@ body {
   font-size: 12px;
   text-align: right;
 }
-
-/* --------------------------------------------------------------- service */
-
-.service { border-left: 3px solid var(--accent); }
-
-.service-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-.service-head h2 { margin-bottom: 4px; }
-.service-head .muted { margin-bottom: 0; }
-
-.service-actions { display: flex; gap: 8px; flex-shrink: 0; }

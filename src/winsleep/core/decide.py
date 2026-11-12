@@ -64,6 +64,7 @@ def decide(
     server_mode: bool,
     server_lock_seconds: int,
     phase: Phase = Phase.OFF,
+    override_until: float = 0.0,
 ) -> Intent:
     """Work out what should happen right now.
 
@@ -71,7 +72,55 @@ def decide(
     idle plan applies.  It is deliberately *not* called ``idle_seconds``:
     that name belongs to the snapshot, where it means how idle the user
     is *right now*.  Keeping the two apart avoids a very easy mistake.
+
+    ``override_until`` is an absolute time in epoch seconds.  While it is
+    in the future the machine is held awake whatever the idle logic says,
+    and it stops mattering the moment it passes - there is no state to
+    clean up and no way to leave the machine stuck awake because a window
+    was closed before the timer could be cancelled.
     """
+    intent = _decide_plain(
+        snap,
+        idle_plan=idle_plan,
+        active_plan=active_plan,
+        idle_after_seconds=idle_after_seconds,
+        idle_cpu_percent=idle_cpu_percent,
+        game_running=game_running,
+        keep_awake_enabled=keep_awake_enabled,
+        server_mode=server_mode,
+        server_lock_seconds=server_lock_seconds,
+        phase=phase,
+    )
+
+    remaining = override_until - snap.now.timestamp()
+    if remaining <= 0:
+        return intent
+
+    # The plan is whatever the idle logic worked out; only the "do not
+    # sleep" part is overridden.  Keeping the plan decision in one place
+    # means an override cannot accidentally leave the machine on the fast
+    # plan all night.
+    minutes = int(remaining // 60)
+    return dataclasses.replace(
+        intent,
+        keep_awake=True,
+        reason=f"timed override, {minutes} min left",
+    )
+
+
+def _decide_plain(
+    snap: Snapshot,
+    *,
+    idle_plan: str,
+    active_plan: str,
+    idle_after_seconds: int,
+    idle_cpu_percent: float,
+    game_running: bool,
+    keep_awake_enabled: bool,
+    server_mode: bool,
+    server_lock_seconds: int,
+    phase: Phase = Phase.OFF,
+) -> Intent:
     idle_for = snap.idle_seconds
 
     # --- server mode ----------------------------------------------------

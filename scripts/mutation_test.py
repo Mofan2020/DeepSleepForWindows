@@ -495,6 +495,143 @@ MUTATIONS: list[tuple[str, Path, str, str]] = [
         '    return enabled.text.strip().lower() == "false"',
         '    return enabled.text.strip().lower() != "false"',
     ),
+    # --- the timed override, the reason line, the tray ------------------
+    (
+        "the timed override is ignored",
+        SRC / "core" / "decide.py",
+        """    remaining = override_until - snap.now.timestamp()
+    if remaining <= 0:
+        return intent""",
+        """    remaining = override_until - snap.now.timestamp()
+    if True:
+        return intent""",
+    ),
+    (
+        "the timed override also picks the plan",
+        SRC / "core" / "decide.py",
+        """    return dataclasses.replace(
+        intent,
+        keep_awake=True,
+        reason=f"timed override, {minutes} min left",
+    )""",
+        """    return dataclasses.replace(
+        intent,
+        plan=active_plan or None,
+        keep_awake=True,
+        reason=f"timed override, {minutes} min left",
+    )""",
+    ),
+    (
+        "a deadline in the past still counts as an override",
+        SRC / "core" / "decide.py",
+        """    remaining = override_until - snap.now.timestamp()
+    if remaining <= 0:
+        return intent""",
+        """    remaining = override_until - snap.now.timestamp()
+    if remaining < -86400:
+        return intent""",
+    ),
+    (
+        "the override deadline is not written to the config",
+        SRC / "core" / "config.py",
+        '            "keep_awake_until": self.keep_awake_until,',
+        '            "keep_awake_until": 0.0,',
+    ),
+    (
+        "the override deadline is not read back from the config",
+        SRC / "core" / "config.py",
+        '            keep_awake_until=max(0.0, float(_number(raw, "keep_awake_until", 0.0))),',
+        '            keep_awake_until=0.0,',
+    ),
+    (
+        "cancelling the override leaves the deadline in place",
+        SRC / "gui" / "bridge.py",
+        """        if wanted <= 0:
+            config.keep_awake_until = 0.0
+            self._save(config)""",
+        """        if wanted <= 0:
+            config.keep_awake_until = config.keep_awake_until
+            self._save(config)""",
+    ),
+    (
+        "the window cannot cancel an override",
+        SRC / "gui" / "bridge.py",
+        """        if wanted <= 0:
+            config.keep_awake_until = 0.0""",
+        """        if wanted <= 0:
+            config.keep_awake_until = time.time()""",
+    ),
+    (
+        "the daemon never says what it decided",
+        SRC / "core" / "daemon.py",
+        """        intent = self._current_intent
+        if intent is None:
+            return {"ok": False, "message": "not decided yet"}""",
+        """        intent = None
+        if intent is None:
+            return {"ok": False, "message": "not decided yet"}""",
+    ),
+    (
+        "the daemon reports its first decision forever",
+        SRC / "core" / "daemon.py",
+        """        intent = self._decide(config)
+        self._current_intent = intent""",
+        """        intent = self._decide(config)
+        self._current_intent = self._current_intent or intent""",
+    ),
+    (
+        "the status message is not answered",
+        SRC / "core" / "daemon.py",
+        """        if kind == "status":
+            return self._status()""",
+        """        if kind == "status!":
+            return self._status()""",
+    ),
+    (
+        "the tray has no way to hold the machine awake",
+        SRC / "core" / "tray.py",
+        '        items.append(pystray.MenuItem("保持唤醒", pystray.Menu(*entries)))',
+        "        pass",
+    ),
+    (
+        "the tray's cancel entry sets half an hour instead",
+        SRC / "core" / "tray.py",
+        """                "取消，让它照常睡",
+                lambda _icon=None, _item=None: on_override(0),""",
+        """                "取消，让它照常睡",
+                lambda _icon=None, _item=None: on_override(30),""",
+    ),
+    (
+        "the selftest does not notice a missing interface file",
+        SRC / "cli.py",
+        """    absent = [
+        name for name in interface_files
+        if not (assets / name).is_file() or (assets / name).stat().st_size == 0
+    ]""",
+        """    absent = []""",
+    ),
+    (
+        "an empty interface file is treated as present",
+        SRC / "cli.py",
+        """        if not (assets / name).is_file() or (assets / name).stat().st_size == 0""",
+        """        if not (assets / name).is_file()""",
+    ),
+    (
+        "the hold command ignores the number",
+        SRC / "cli.py",
+        """    config.keep_awake_until = 0.0 if minutes <= 0 else time.time() + minutes * 60
+    config_mod.save(config, paths.config_path())
+
+    if minutes <= 0:
+        print("已取消，机器会照常睡")
+        return 0""",
+        """    config.keep_awake_until = time.time() + 60
+    config_mod.save(config, paths.config_path())
+
+    if minutes <= 0:
+        print("已取消，机器会照常睡")
+        return 0""",
+    ),
 ]
 
 

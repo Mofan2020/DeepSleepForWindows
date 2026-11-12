@@ -22,6 +22,7 @@ import logging
 import logging.handlers
 import os
 import sys
+import time
 
 from .core import config as config_mod
 from .core import paths, winapi, winpower
@@ -195,6 +196,38 @@ def _open_window() -> int:
         return 2
 
 
+def _cmd_hold(args: argparse.Namespace) -> int:
+    """Hold the machine awake for a while, or stop holding it.
+
+    The deadline lives in the config, so this survives the command
+    returning, the window closing and the program being restarted.
+    """
+    minutes = 0
+    raw = str(getattr(args, "minutes", "") or "").strip().lower()
+    if raw not in ("", "off", "0", "cancel", "none"):
+        try:
+            minutes = int(raw)
+        except ValueError:
+            print(f"不是分钟数：{raw}")
+            return 2
+        if minutes < 0:
+            print("分钟数不能是负数")
+            return 2
+
+    config = config_mod.load(paths.config_path())
+    config.keep_awake_until = 0.0 if minutes <= 0 else time.time() + minutes * 60
+    config_mod.save(config, paths.config_path())
+
+    if minutes <= 0:
+        print("已取消，机器会照常睡")
+        return 0
+
+    hours, rest = divmod(minutes, 60)
+    shown = f"{hours} 小时 {rest} 分钟" if hours else f"{rest} 分钟"
+    print(f"接下来 {shown}不睡觉")
+    return 0
+
+
 def _cmd_tray(_args: argparse.Namespace) -> int:
     """Stay in the notification area without showing a window."""
     from .core import install, tray, winapi, winpower
@@ -226,8 +259,28 @@ def _cmd_tray(_args: argparse.Namespace) -> int:
     def _switch(guid: str) -> None:
         winpower.set_active_plan(guid)
 
+    def _override(minutes: int) -> None:
+        """Hold the machine awake for a while, or stop holding it.
+
+        The deadline goes into the config, which the daemon reads on
+        every tick - so the promise is kept even if this tray process is
+        closed a second later, and it ends by itself with nothing left
+        to clean up.
+        """
+        config = config_mod.load(paths.config_path())
+        config.keep_awake_until = (
+            0.0 if minutes <= 0 else time.time() + minutes * 60
+        )
+        config_mod.save(config, paths.config_path())
+        if minutes <= 0:
+            log.info("the timed override was cancelled from the tray")
+        else:
+            log.info("the machine is held awake for %d minutes (from the tray)", minutes)
+
     try:
-        return tray.run_tray(_show, _lock, _quit, _plans, _switch, heartbeat=_beat)
+        return tray.run_tray(
+            _show, _lock, _quit, _plans, _switch, heartbeat=_beat, on_override=_override
+        )
     finally:
         # The icon is gone now, so the answer to "is the tray there?"
         # has to change at once rather than twenty seconds later.
@@ -465,6 +518,23 @@ def _cmd_selftest(_args: argparse.Namespace) -> int:
         print("these modules are missing from the bundle:")
         for name in missing:
             print(f"  - {name}")
+        return 1
+
+    # The window is three files that the build has to carry.  If one of
+    # them is missing the window opens blank or does not open at all,
+    # and nothing in the log says which file was not there.
+    from .gui.app import _assets_dir
+
+    assets = _assets_dir()
+    interface_files = ["index.html", "app.js", "style.css"]
+    absent = [
+        name for name in interface_files
+        if not (assets / name).is_file() or (assets / name).stat().st_size == 0
+    ]
+    if absent:
+        print("these interface files are missing from the bundle:")
+        for name in absent:
+            print(f"  - {assets / name}")
         return 1
 
     # A module that imports is not the same as a module that works.
@@ -749,6 +819,15 @@ def build_parser() -> argparse.ArgumentParser:
     switch.set_defaults(func=_cmd_switch)
 
     sub.add_parser("lock", help="lock the screen").set_defaults(func=_cmd_lock)
+
+    hold = sub.add_parser("hold", help="hold the machine awake for a while")
+    hold.add_argument(
+        "minutes",
+        nargs="?",
+        default="",
+        help="how long, in minutes; leave out or say off to cancel",
+    )
+    hold.set_defaults(func=_cmd_hold)
 
     sub.add_parser(
         "telemetry-off", help="turn the Microsoft telemetry off"

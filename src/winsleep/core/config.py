@@ -69,6 +69,13 @@ class Config:
     #: age of the lines".
     log_max_age_days: float = 0.0
 
+    #: Absolute time, in epoch seconds, until which the machine is held
+    #: awake no matter what the idle logic says.  Zero is "no override".
+    #: It is a deadline rather than a flag on purpose: the daemon only has
+    #: to compare it against the clock, so closing the window (or the
+    #: whole program) cannot leave the machine stuck awake.
+    keep_awake_until: float = 0.0
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "idle_plan": self.idle_plan,
@@ -84,6 +91,7 @@ class Config:
             "last_plan_guid": self.last_plan_guid,
             "log_max_lines": self.log_max_lines,
             "log_max_age_days": self.log_max_age_days,
+            "keep_awake_until": self.keep_awake_until,
         }
 
     @classmethod
@@ -108,6 +116,7 @@ class Config:
             last_plan_guid=str(raw.get("last_plan_guid", "") or ""),
             log_max_lines=max(0, int(_number(raw, "log_max_lines", 0))),
             log_max_age_days=max(0.0, float(_number(raw, "log_max_age_days", 0.0))),
+            keep_awake_until=max(0.0, float(_number(raw, "keep_awake_until", 0.0))),
         )
 
 

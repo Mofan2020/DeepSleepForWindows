@@ -116,6 +116,7 @@ DeepSleepForWindows status          print the current state as JSON
 DeepSleepForWindows plans           list the power plans
 DeepSleepForWindows switch "Balanced"   switch the power plan now
 DeepSleepForWindows lock            lock the screen now
+DeepSleepForWindows hold 30         do not sleep for 30 minutes (off to cancel)
 DeepSleepForWindows sleep [--hibernate]  put the machine to sleep now
 DeepSleepForWindows update           check for a newer version and install it
 DeepSleepForWindows doctor              check that the setup is right
@@ -144,9 +145,15 @@ them; the file is plain JSON and can be edited by hand.
   "rules": [],
   "log_max_lines": 0,
   "log_max_age_days": 0.0,
+  "keep_awake_until": 0.0,
   "last_plan_guid": ""
 }
 ```
+
+`keep_awake_until` is when the timed "do not sleep" hold ends, as a Unix
+timestamp in seconds. `0` means no hold. It is a deadline rather than a switch,
+so closing the window or restarting the program neither cancels it nor extends
+it.
 
 `log_max_lines` and `log_max_age_days` trim the log file for you. Both are `0`
 means no limit.

@@ -82,6 +82,7 @@ DeepSleepForWindows status               以 JSON 打印当前状态
 DeepSleepForWindows plans                列出所有电源计划
 DeepSleepForWindows switch "平衡"        立刻切换电源计划
 DeepSleepForWindows lock                 立刻锁屏
+DeepSleepForWindows hold 30              接下来 30 分钟不睡（off 取消）
 DeepSleepForWindows sleep [--hibernate]  立刻让机器睡觉
 DeepSleepForWindows update          检查新版本并安装
 DeepSleepForWindows doctor               检查装得对不对
@@ -108,11 +109,14 @@ DeepSleepForWindows uninstall            移除计划任务
   "rules": [],
   "log_max_lines": 0,
   "log_max_age_days": 0.0,
+  "keep_awake_until": 0.0,
   "last_plan_guid": ""
 }
 ```
 
 `log_max_lines` 和 `log_max_age_days` 用来自动裁剪日志。两个都是 `0` 表示不管。
+
+`keep_awake_until` 是「临时不睡觉」的结束时刻（Unix 时间戳，秒）。`0` 表示没有设置。它是一个截止时间而不是开关，所以关掉窗口、重启程序都不会让它失效或者被延长。
 
 ### 规则条件
 

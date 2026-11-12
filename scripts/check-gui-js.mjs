@@ -41,16 +41,35 @@ function extract(name) {
   return source.slice(start, index + 1);
 }
 
-/* The units table is a constant, not a function, so it is cut out by
- * hand.  It has to be the same one the interface uses. */
-const units = source.match(/const CONDITION_UNITS = \{[\s\S]*?\};/);
-if (!units) throw new Error('CONDITION_UNITS was not found in app.js');
+/* Tables are constants, not functions, so they are cut out by hand.
+ * They have to be the same ones the interface uses - a copy would pass
+ * this test while the real window used something else. */
+function constant(pattern, name) {
+  const found = source.match(pattern);
+  if (!found) throw new Error(`${name} was not found in app.js`);
+  return found[0];
+}
+
+const units = constant(/const CONDITION_UNITS = \{[\s\S]*?\};/, 'CONDITION_UNITS');
+const groupLabels = constant(/const GROUP_LABELS = \{[\s\S]*?\};/, 'GROUP_LABELS');
+const dayNames = constant(/const DAYS = \[[\s\S]*?\];/, 'DAYS');
+const stateDecl = constant(/let state = \{[^\n]*\};/, 'state');
 
 const code = [
-  units[0],
+  units,
+  groupLabels,
+  dayNames,
+  stateDecl,
   extract('setIfIdle'),
+  extract('makeOption'),
+  extract('syncActionPlanOptions'),
+  extract('conditionValueIn'),
   extract('conditionValue'),
   extract('formatIdle'),
+  extract('reasonText'),
+  extract('overviewChip'),
+  extract('renderOverview'),
+  extract('renderGuardCards'),
   extract('fillPlanSelect'),
   extract('renderRules'),
   extract('renderGames'),
@@ -72,8 +91,11 @@ function field(value, editing) {
 }
 
 const context = vm.createContext({});
-vm.runInContext(`${code}\nthis.__out = { setIfIdle, conditionValue, formatIdle };`, context);
-const { setIfIdle, conditionValue, formatIdle } = context.__out;
+vm.runInContext(
+  `${code}\nthis.__out = { setIfIdle, conditionValue, formatIdle, reasonText };`,
+  context,
+);
+const { setIfIdle, conditionValue, formatIdle, reasonText } = context.__out;
 
 let passed = 0;
 let failed = 0;
@@ -341,6 +363,102 @@ test('the idle time is shown in a readable way', () => {
   assert.strictEqual(formatIdle(90), '1 分 30 秒');
   assert.strictEqual(formatIdle(3600), '1 小时 0 分');
   assert.strictEqual(formatIdle(-1), '--');
+});
+
+/* ------------------------------------------------------- the "why" line */
+
+/* The daemon writes its reasons in English because that is what its log
+ * is written in.  The window is Chinese, so the known ones are
+ * translated - but an unknown one has to come through as it is.  A
+ * generic "后台决定" would hide a reason nobody has taught the window
+ * about yet, and that is exactly the case worth seeing. */
+test('a known reason is said in Chinese', () => {
+  assert.strictEqual(reasonText('the user is active'), '你在用电脑，按活跃计划处理');
+  assert.strictEqual(reasonText('a game is running'), '有游戏在跑，按活跃计划处理');
+  assert.strictEqual(reasonText('rule: 夜间省电'), '规则「夜间省电」命中');
+});
+
+test('a reason with a number in it keeps the number', () => {
+  assert.strictEqual(reasonText('timed override, 30 min left'), '你要求保持唤醒，还有 30 分钟');
+  assert.strictEqual(reasonText('cpu is busy (48%)'), 'CPU 有 48%，不算空闲');
+  assert.match(reasonText('idle for 900s'), /15 分/);
+});
+
+test('server mode countdown is counted in minutes', () => {
+  assert.strictEqual(reasonText('server mode: locking in 120s'), '服务器模式：2 分钟后锁屏');
+});
+
+test('an unknown reason is passed through, not swallowed', () => {
+  assert.strictEqual(reasonText('something new happened'), 'something new happened');
+});
+
+test('an empty reason is not an error', () => {
+  assert.strictEqual(reasonText(''), '');
+  assert.strictEqual(reasonText(null), '');
+});
+
+/* ---------------------------------------------------- filling in plans */
+
+/* The action widget is built before the first refresh, so on a cold
+ * start the "switch to which plan" dropdown was empty.  Filling it in
+ * must not throw away a choice the user already made. */
+test('the plan list is filled in when it arrives', () => {
+  const select = element({ options: [], value: '' });
+  elementSet();
+  const fields = { ruleAction: { value: 'set_power_plan' }, ruleActionValue: select };
+  const scope = vm.createContext({
+    ...context,
+    $: (id) => fields[id],
+    state: { plans: ['平衡', '节能'], plan_guids: [], config: {} },
+    document: { createElement: (tag) => element({ tag, textContent: '' }) },
+  });
+  // appendChild records what was added, so the options can be read back.
+  select.appendChild = function (option) { this.options.push(option); };
+  // ``state`` is declared with let, so it is not a property of the
+  // global object - it has to be set from inside the sandbox.
+  vm.runInContext(
+    `${code}\nthis.__sync = syncActionPlanOptions;\nstate.plans = ['平衡', '节能'];`,
+    scope,
+  );
+
+  assert.strictEqual(vm.runInContext('this.__sync()', scope), true);
+  assert.deepStrictEqual(
+    select.options.map((option) => option.value),
+    ['平衡', '节能'],
+  );
+});
+
+test('a plan list that is already right is left alone', () => {
+  const select = element({ options: [{ value: '平衡' }, { value: '节能' }], value: '节能' });
+  const fields = { ruleAction: { value: 'set_power_plan' }, ruleActionValue: select };
+  const scope = vm.createContext({
+    ...context,
+    $: (id) => fields[id],
+    document: { createElement: (tag) => element({ tag, textContent: '' }) },
+  });
+  vm.runInContext(
+    `${code}\nthis.__sync = syncActionPlanOptions;\nstate.plans = ['平衡', '节能'];`,
+    scope,
+  );
+
+  assert.strictEqual(vm.runInContext('this.__sync()', scope), false);
+  assert.strictEqual(select.value, '节能');
+});
+
+test('nothing is filled in when the action is not a plan switch', () => {
+  const select = element({ options: [], value: '' });
+  const fields = { ruleAction: { value: 'lock_screen' }, ruleActionValue: select };
+  const scope = vm.createContext({
+    ...context,
+    $: (id) => fields[id],
+    document: { createElement: (tag) => element({ tag, textContent: '' }) },
+  });
+  vm.runInContext(
+    `${code}\nthis.__sync = syncActionPlanOptions;\nstate.plans = ['平衡'];`,
+    scope,
+  );
+
+  assert.strictEqual(vm.runInContext('this.__sync()', scope), false);
 });
 
 /* ------------------------------------------------------------- report */

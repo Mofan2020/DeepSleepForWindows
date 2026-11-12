@@ -27,6 +27,20 @@ const ACTION_LABELS = {
   run_command: '运行程序',
 };
 
+/* The subgroups Windows uses for power settings, in the words a person
+ * would use.  A GUID that is not here is shown as it came back - better
+ * than hiding a setting because its group was not on the list. */
+const GROUP_LABELS = {
+  SUB_VIDEO: '显示',
+  SUB_SLEEP: '睡眠',
+  SUB_DISK: '硬盘',
+  SUB_PROCESSOR: '处理器',
+  SUB_BATTERY: '电池',
+  SUB_PCIEXPRESS: 'PCI Express',
+  SUB_BUTTONS: '电源按钮',
+  SUB_NONE: '其他',
+};
+
 /* The unit belongs to the label.  A bare number in a rule is a number
  * of seconds, so the interface works in minutes and says so. */
 const CONDITION_UNITS = {
@@ -46,6 +60,17 @@ let logLines = [];
 let logTimer = null;
 let logFollow = true;
 const LOG_MAX_ON_SCREEN = 2000;
+
+/* What the log page is currently showing: every line, only the warnings,
+ * or only the errors.  The filter is applied to the lines already in
+ * memory, so switching it does not re-read the file. */
+let logLevel = 'all';
+let logQuery = '';
+
+const LOG_LEVELS = {
+  warn: /\b(WARNING|WARN)\b/,
+  error: /\b(ERROR|CRITICAL|Traceback|Exception)\b/,
+};
 
 function formatIdle(seconds) {
   if (seconds === null || seconds === undefined || seconds < 0) return '--';
@@ -84,94 +109,225 @@ function guidOfPlan(name) {
 
 /* ---------------------------------------------------------- rule form */
 
-function buildConditionValue() {
-  const area = $('ruleValueArea');
-  area.innerHTML = '';
-  area.dataset.kind = '';
-  const kind = $('ruleKind').value;
+/* The kinds a condition can have.  One table, used both to build a new
+ * row and to label a saved one, so the two cannot drift apart. */
+const CONDITION_KINDS = [
+  ['idle_at_least', '空闲至少'],
+  ['idle_below', '空闲少于'],
+  ['cpu_below', 'CPU 低于'],
+  ['cpu_above', 'CPU 高于'],
+  ['process_running', '进程运行中'],
+  ['time_window', '时间窗口'],
+  ['day_of_week', '星期'],
+];
 
-  if (kind === 'idle_at_least' || kind === 'idle_below') {
-    const number = document.createElement('input');
-    number.className = 'num';
-    number.type = 'number';
-    number.min = '0';
-    number.step = '1';
-    number.id = 'ruleValue';
-    number.placeholder = '10';
-    const unit = document.createElement('span');
-    unit.className = 'unit';
-    unit.textContent = '分钟';
-    area.append(number, unit);
-    return;
-  }
+const DAYS = [
+  ['mon', '一'], ['tue', '二'], ['wed', '三'], ['thu', '四'],
+  ['fri', '五'], ['sat', '六'], ['sun', '日'],
+];
 
-  if (kind === 'cpu_below' || kind === 'cpu_above') {
-    const number = document.createElement('input');
-    number.className = 'num';
-    number.type = 'number';
-    number.min = '0';
-    number.max = '100';
-    number.step = '1';
-    number.id = 'ruleValue';
-    number.placeholder = '15';
-    const unit = document.createElement('span');
-    unit.className = 'unit';
-    unit.textContent = '%';
-    area.append(number, unit);
-    return;
+/* The value the rule stores, from the value the user typed.
+ *
+ * The interface works in minutes and a rule keeps seconds, so a rule
+ * written by hand stays readable and the number in the config always
+ * means the same thing wherever it came from. */
+function conditionValueIn(kind, raw) {
+  const text = String(raw == null ? '' : raw).trim();
+  if (!text) return '';
+  if (CONDITION_UNITS[kind] === '分钟') {
+    const minutes = parseFloat(text);
+    if (!Number.isFinite(minutes)) return text;
+    return String(Math.round(minutes * 60));
   }
+  return text;
+}
 
-  if (kind === 'process_running') {
-    const text = document.createElement('input');
-    text.className = 'text';
-    text.id = 'ruleValue';
-    text.placeholder = 'steam.exe';
-    const pick = document.createElement('button');
-    pick.type = 'button';
-    pick.className = 'btn';
-    pick.textContent = '选择';
-    pick.addEventListener('click', async () => {
-      const chosen = await pickProcess();
-      if (chosen) text.value = chosen;
-    });
-    area.append(text, pick);
-    return;
-  }
-
-  if (kind === 'time_window') {
-    const text = document.createElement('input');
-    text.className = 'text';
-    text.id = 'ruleValue';
-    text.placeholder = '09:00-18:00';
-    const unit = document.createElement('span');
-    unit.className = 'unit';
-    unit.textContent = '24 小时制';
-    area.append(text, unit);
-    return;
-  }
+/* Read one row of the condition list.  Each row keeps its kind in
+ * ``dataset`` and its widget inside itself, so several rows can be open
+ * at once - the old form only ever had one. */
+function readConditionRow(row) {
+  const kind = row.dataset.kind || '';
+  if (!kind) return null;
 
   if (kind === 'day_of_week') {
-    const days = [
-      ['mon', '一'], ['tue', '二'], ['wed', '三'], ['thu', '四'],
-      ['fri', '五'], ['sat', '六'], ['sun', '日'],
-    ];
-    const box = document.createElement('div');
-    box.className = 'day-row';
-    for (const [key, label] of days) {
+    const picked = [];
+    for (const input of row.querySelectorAll('.day-input')) {
+      if (input.checked) picked.push(input.value);
+    }
+    return picked.length ? { kind, value: picked.join(',') } : null;
+  }
+
+  const field = row.querySelector('.cond-input');
+  if (!field) return null;
+  const value = conditionValueIn(kind, field.value);
+  return value ? { kind, value } : null;
+}
+
+function readConditions() {
+  const out = [];
+  for (const row of document.querySelectorAll('#ruleConditions .cond-row')) {
+    const one = readConditionRow(row);
+    if (one) out.push(one);
+  }
+  return out;
+}
+
+/* Build the value widget for one condition kind. */
+function conditionWidget(kind, value) {
+  const box = document.createElement('div');
+  box.className = 'cond-value';
+
+  if (kind === 'day_of_week') {
+    const picked = new Set(String(value || '').split(',').map((s) => s.trim()));
+    const row = document.createElement('div');
+    row.className = 'day-row';
+    for (const [key, label] of DAYS) {
       const wrap = document.createElement('label');
       wrap.className = 'day';
       const input = document.createElement('input');
       input.type = 'checkbox';
       input.value = key;
       input.className = 'day-input';
+      input.checked = picked.has(key);
       const span = document.createElement('span');
       span.textContent = label;
       wrap.append(input, span);
-      box.appendChild(wrap);
+      row.appendChild(wrap);
     }
-    area.appendChild(box);
-    area.dataset.kind = 'day_of_week';
+    box.appendChild(row);
+    return box;
   }
+
+  const field = document.createElement('input');
+  field.className = 'cond-input';
+
+  if (CONDITION_UNITS[kind] === '分钟' || CONDITION_UNITS[kind] === '%') {
+    field.className = 'cond-input num';
+    field.type = 'number';
+    field.min = '0';
+    field.step = '1';
+    if (CONDITION_UNITS[kind] === '%') field.max = '100';
+    // The rule stores seconds, the field shows minutes.
+    const shown = CONDITION_UNITS[kind] === '分钟' && value
+      ? Math.round(parseFloat(value) / 60)
+      : value;
+    field.value = shown == null || shown === '' ? '' : String(shown);
+    field.placeholder = CONDITION_UNITS[kind] === '%' ? '15' : '10';
+  } else if (kind === 'process_running') {
+    field.className = 'cond-input text';
+    field.value = value || '';
+    field.placeholder = 'steam.exe';
+  } else {
+    field.className = 'cond-input text';
+    field.value = value || '';
+    field.placeholder = '09:00-18:00';
+  }
+
+  box.appendChild(field);
+
+  // A process name is picked, not typed: a typo there means the rule
+  // silently never fires.
+  if (kind === 'process_running') {
+    const pick = document.createElement('button');
+    pick.type = 'button';
+    pick.className = 'btn small';
+    pick.textContent = '选择';
+    pick.addEventListener('click', async () => {
+      const chosen = await pickProcess();
+      if (chosen) field.value = chosen;
+    });
+    box.appendChild(pick);
+  } else {
+    const unit = document.createElement('span');
+    unit.className = 'unit';
+    unit.textContent = CONDITION_UNITS[kind] || (kind === 'time_window' ? '24 小时制' : '');
+    box.appendChild(unit);
+  }
+
+  return box;
+}
+
+function addConditionRow(kind, value) {
+  const list = $('ruleConditions');
+  if (!list) return null;
+  const row = document.createElement('div');
+  row.className = 'cond-row';
+  row.dataset.kind = kind || 'idle_at_least';
+
+  const select = document.createElement('select');
+  select.className = 'select cond-kind';
+  for (const [key, label] of CONDITION_KINDS) {
+    select.appendChild(makeOption(key, label));
+  }
+  select.value = row.dataset.kind;
+  select.addEventListener('change', () => {
+    row.dataset.kind = select.value;
+    const old = row.querySelector('.cond-value');
+    if (old) old.remove();
+    row.insertBefore(conditionWidget(select.value, ''), remove);
+  });
+
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'cond-del';
+  remove.textContent = '×';
+  remove.title = '去掉这条条件';
+  remove.addEventListener('click', () => {
+    row.remove();
+    if (list.children.length === 0) addConditionRow();
+  });
+
+  row.append(select, conditionWidget(row.dataset.kind, value || ''), remove);
+  list.appendChild(row);
+  return row;
+}
+
+/* The plan list is only known after the first refresh, but the action
+ * widget is built when the window opens - so on a cold start the
+ * "switch to which plan" dropdown was empty until something else made
+ * the plan list arrive.  This fills in the plans without touching the
+ * choice the user already made. */
+function syncActionPlanOptions() {
+  const select = $('ruleActionValue');
+  if (!select) return false;
+  const action = $('ruleAction');
+  if (!action || action.value !== 'set_power_plan') return false;
+
+  const wanted = state.plans || [];
+  if (wanted.length === 0) return false;
+
+  const have = [];
+  for (const option of select.options || []) have.push(option.value);
+  if (have.length === wanted.length && wanted.every((plan) => have.includes(plan))) {
+    return false;
+  }
+
+  const chosen = select.value;
+  select.innerHTML = '';
+  for (const plan of wanted) {
+    select.appendChild(makeOption(plan, plan));
+  }
+  if (chosen && wanted.includes(chosen)) select.value = chosen;
+  return true;
+}
+
+/* What the old single-value form read.  The multi-row form uses
+ * ``readConditionRow``; this stays because the same unit conversion has
+ * to apply to both, and there is one test that pins the conversion. */
+function conditionValue() {
+  const kind = $('ruleKind').value;
+
+  if (kind === 'day_of_week') {
+    const picked = [];
+    for (const input of document.querySelectorAll('.day-input')) {
+      if (input.checked) picked.push(input.value);
+    }
+    return picked.join(',');
+  }
+
+  const box = $('ruleValue');
+  if (!box) return '';
+  return conditionValueIn(kind, box.value);
 }
 
 function buildActionValue() {
@@ -187,6 +343,7 @@ function buildActionValue() {
       select.appendChild(makeOption(plan, plan));
     }
     area.appendChild(select);
+    syncActionPlanOptions();
     return;
   }
 
@@ -223,32 +380,6 @@ function buildActionValue() {
   area.append(text, pick);
 }
 
-function conditionValue() {
-  const kind = $('ruleKind').value;
-
-  if (kind === 'day_of_week') {
-    const picked = [];
-    for (const input of document.querySelectorAll('.day-input')) {
-      if (input.checked) picked.push(input.value);
-    }
-    return picked.join(',');
-  }
-
-  const box = $('ruleValue');
-  if (!box) return '';
-  const raw = box.value.trim();
-  if (!raw) return '';
-
-  if (CONDITION_UNITS[kind] === '分钟') {
-    const minutes = parseFloat(raw);
-    if (!Number.isFinite(minutes)) return raw;
-    // The rule keeps seconds, so a rule written by hand stays
-    // readable and the interface works in minutes.
-    return String(Math.round(minutes * 60));
-  }
-  return raw;
-}
-
 function describeRule(rule) {
   const conditions = (rule.conditions || [])
     .map((c) => {
@@ -260,6 +391,13 @@ function describeRule(rule) {
       }
       if (c.kind === 'cpu_below' || c.kind === 'cpu_above') {
         return `${label} ${c.value}%`;
+      }
+      if (c.kind === 'day_of_week') {
+        const names = String(c.value).split(',').map((key) => {
+          const found = DAYS.find(([day]) => day === key.trim());
+          return found ? '周' + found[1] : key.trim();
+        });
+        return names.join('、');
       }
       return `${label} ${c.value}`;
     })
@@ -306,12 +444,24 @@ function renderRules(rules) {
     action.textContent = text.action;
 
     const remove = document.createElement('button');
-    remove.className = 'btn ghost';
+    remove.className = 'btn ghost small';
     remove.textContent = '删除';
     remove.addEventListener('click', async () => {
       await api().remove_rule(rule.name);
       await refresh();
     });
+
+    // The priority is what decides the order when two rules fire at the
+    // same time.  Hiding it would make that order look arbitrary.
+    if (rule.priority) {
+      const pri = document.createElement('span');
+      pri.className = 'rule-pri';
+      pri.textContent = 'P' + rule.priority;
+      pri.title = '优先级 ' + rule.priority + '，数字大的先执行';
+      row.append(toggle, name, cond, action, pri, remove);
+      list.appendChild(row);
+      continue;
+    }
 
     row.append(toggle, name, cond, action, remove);
     list.appendChild(row);
@@ -384,7 +534,24 @@ async function renderPlanSettings(guid) {
     return;
   }
 
+  // The settings come back in one flat list.  Eleven numbers in a row
+  // give no clue which ones belong together, so they are grouped by the
+  // subgroup Windows itself uses.
+  let currentGroup = null;
+  let groupBox = null;
+
   for (const row of rows) {
+    if (row.group !== currentGroup) {
+      currentGroup = row.group;
+      groupBox = document.createElement('div');
+      groupBox.className = 'setting-group';
+      const head = document.createElement('div');
+      head.className = 'setting-group-head';
+      head.textContent = GROUP_LABELS[row.group] || row.group || '其他';
+      groupBox.appendChild(head);
+      box.appendChild(groupBox);
+    }
+
     const line = document.createElement('div');
     line.className = 'setting';
 
@@ -393,7 +560,8 @@ async function renderPlanSettings(guid) {
     label.textContent = row.name;
 
     let picker;
-    if (!row.choices || row.choices.length === 0) {
+    const hasChoices = row.choices && row.choices.length > 0;
+    if (!hasChoices) {
       picker = document.createElement('input');
       picker.className = 'num';
       picker.type = 'number';
@@ -416,12 +584,15 @@ async function renderPlanSettings(guid) {
       $('planSaveHint').className = 'hint';
     });
 
+    // The dropdown labels already say "10 分钟", so a unit next to it
+    // would read "10 分钟 分钟".  The number fields have no labels of
+    // their own and do need it.
     const unit = document.createElement('span');
     unit.className = 'unit';
-    unit.textContent = row.unit || '';
+    unit.textContent = hasChoices ? '' : (row.unit || '');
 
     line.append(label, picker, unit);
-    box.appendChild(line);
+    groupBox.appendChild(line);
   }
 
   bar.hidden = Object.keys(planChanges).length === 0;
@@ -513,20 +684,27 @@ function serviceButton(label, action, primary) {
 }
 
 /* The state decides what the buttons do.  A service that is not
- * running is not a dead end: there is always something to press. */
+ * running is not a dead end: there is always something to press.
+ *
+ * A working service gets one quiet line.  It used to get a full panel
+ * with a heading, two paragraphs and a button, which is a lot of the
+ * window spent on something that needs no attention. */
 function renderService(service) {
   const actions = $('serviceActions');
-  actions.innerHTML = '';
   const text = $('serviceText');
   const hint = $('serviceHint');
+  const dot = $('serviceDot');
+  if (actions) actions.innerHTML = '';
 
   if (!service) {
-    text.textContent = '正在检查…';
+    if (text) text.textContent = '正在检查后台服务…';
+    if (dot) dot.className = 'dot small';
     return;
   }
 
   if (!service.installed) {
-    text.textContent = '后台服务未安装。装上之后，登录时它就会自己起来。';
+    if (dot) dot.className = 'dot small warn';
+    text.textContent = '后台服务没有安装。装上之后开机自己起来。';
     hint.textContent = '';
     actions.appendChild(
       serviceButton('安装并启动', () => api().install_service(), true)
@@ -539,8 +717,9 @@ function renderService(service) {
    * fails.  Say that instead of leaving the user pressing a button
    * that cannot work. */
   if (service.stale) {
+    if (dot) dot.className = 'dot small warn';
     text.textContent = '后台服务的任务还指着程序原来的位置。';
-    hint.textContent = '程序被移动过了，把任务重新装一次就好。';
+    hint.textContent = '程序被移动过了，重装一次任务就好。';
     actions.appendChild(
       serviceButton('重新安装任务', () => api().install_service(), true)
     );
@@ -548,17 +727,19 @@ function renderService(service) {
   }
 
   if (!service.running) {
+    if (dot) dot.className = 'dot small warn';
     text.textContent = '后台服务已安装，但没有在运行。';
-    hint.textContent = '';
+    hint.textContent = '现在没人看着空闲时间，规则不会触发。';
     actions.appendChild(
       serviceButton('启动', () => api().start_service(), true)
     );
     return;
   }
 
+  if (dot) dot.className = 'dot small on';
   text.textContent = service.agent_running
-    ? '后台服务运行中，正在看着你的键盘和鼠标。'
-    : '后台服务运行中。代理没有在运行，读不到真实的空闲时间。';
+    ? '后台服务运行中'
+    : '后台服务运行中，但读空闲时间的那一半没在跑';
 
   /* The icon lives in the notification area, which Windows 11 hides
    * behind a small arrow by default.  Saying whether it is really
@@ -569,7 +750,10 @@ function renderService(service) {
   } else {
     tray.push('托盘图标没有装上');
   }
-  hint.textContent = tray.join('，');
+  if (!service.agent_running) {
+    tray.push('读不到真实空闲时间，会一直按「你还在」处理');
+  }
+  hint.textContent = tray.join(' · ');
 
   actions.appendChild(
     serviceButton('停止', () => api().stop_service(), false)
@@ -645,6 +829,191 @@ async function refreshTelemetry() {
   }
 }
 
+/* ---------------------------------------------------------- the overview */
+
+/* Why the machine is in the state it is in.
+ *
+ * The daemon answers with a short English sentence because that is what
+ * its log is written in.  The window is Chinese, so the known ones are
+ * translated here.  An unknown reason is shown as it arrived - a new
+ * reason in the daemon should appear in the window, not disappear
+ * behind a generic "后台决定".
+ */
+function reasonText(reason) {
+  const raw = String(reason || '').trim();
+  if (!raw) return '';
+
+  let match = /^timed override, (\d+) min left$/.exec(raw);
+  if (match) return `你要求保持唤醒，还有 ${match[1]} 分钟`;
+
+  match = /^server mode: locking in (\d+)s$/.exec(raw);
+  if (match) {
+    const left = parseInt(match[1], 10);
+    return `服务器模式：${Math.max(0, Math.round(left / 60))} 分钟后锁屏`;
+  }
+
+  match = /^cpu is busy \((\d+)%\)$/.exec(raw);
+  if (match) return `CPU 有 ${match[1]}%，不算空闲`;
+
+  match = /^idle for (\d+)s$/.exec(raw);
+  if (match) {
+    const seconds = parseInt(match[1], 10);
+    return `已经离开 ${formatIdle(seconds)}，按空闲计划处理`;
+  }
+
+  match = /^rule: (.+)$/.exec(raw);
+  if (match) return `规则「${match[1]}」命中`;
+
+  const known = {
+    'a game is running': '有游戏在跑，按活跃计划处理',
+    'the user is active': '你在用电脑，按活跃计划处理',
+    'waiting for the agent': '读空闲时间的那一半没有回报，先按你还在处理',
+    'server mode': '服务器模式开着，机器不会睡',
+    'server mode: locking the screen': '服务器模式：正在锁屏',
+    'server mode: the screen is locked': '服务器模式：屏幕已经锁了',
+  };
+  return known[raw] || raw;
+}
+
+function overviewChip(text, kind) {
+  const chip = document.createElement('span');
+  chip.className = 'pill' + (kind ? ' ' + kind : '');
+  chip.textContent = text;
+  return chip;
+}
+
+function renderOverview(data) {
+  const config = data.config || {};
+  const now = data.server_now || 0;
+
+  const plan = $('heroPlan');
+  if (plan) plan.textContent = data.active_plan || '未知';
+
+  // --- why -------------------------------------------------------------
+  const why = $('heroWhy');
+  const intent = data.intent || null;
+  if (why) {
+    if (!data.daemon_running) {
+      why.textContent = '后台服务没在运行，所以现在没人做决定。';
+    } else if (!intent) {
+      why.textContent = '后台刚起来，还没做过决定。';
+    } else {
+      why.textContent = reasonText(intent.reason) || '后台没有说明原因。';
+    }
+  }
+
+  const chips = $('heroChips');
+  if (chips) {
+    chips.innerHTML = '';
+    if (config.server_mode) chips.appendChild(overviewChip('服务器模式', 'accent'));
+    if (data.override_remaining > 0) {
+      chips.appendChild(overviewChip('临时保持唤醒 ' + formatIdle(data.override_remaining), 'accent'));
+    } else if (config.keep_awake) {
+      chips.appendChild(overviewChip('一直保持唤醒', 'on'));
+    }
+    if (data.override_remaining > 0 || config.keep_awake || config.server_mode) {
+      chips.appendChild(overviewChip('不会自动睡', 'on'));
+    }
+    if (intent && intent.lock_in !== null && intent.lock_in !== undefined) {
+      chips.appendChild(overviewChip('锁屏倒计时 ' + formatIdle(intent.lock_in), 'warn'));
+    }
+    if (intent && !intent.agent_fresh) {
+      chips.appendChild(overviewChip('空闲时间不可信', 'bad'));
+    }
+  }
+
+  // --- the idle track --------------------------------------------------
+  const idleSeconds = data.idle_seconds;
+  const threshold = config.idle_seconds ?? 600;
+  const idle = $('heroIdle');
+  if (idle) idle.textContent = formatIdle(idleSeconds);
+
+  const thresholdLabel = $('heroThreshold');
+  if (thresholdLabel) {
+    thresholdLabel.textContent = `阈值 ${Math.round(threshold / 60)} 分钟`;
+  }
+
+  // The bar is only drawn when the threshold is a real number: a
+  // percentage of zero would be a divide by zero dressed up as progress.
+  const bar = $('idleBar');
+  if (bar && bar.style && threshold > 0 && idleSeconds >= 0) {
+    const pct = Math.min(100, (idleSeconds / threshold) * 100);
+    bar.style.width = pct.toFixed(1) + '%';
+    bar.style.background = pct >= 100
+      ? 'linear-gradient(90deg, #4ade80, #5eead4)'
+      : '';
+  }
+
+  // --- the override ----------------------------------------------------
+  const state = $('overrideState');
+  if (state) {
+    const left = data.override_remaining || 0;
+    state.textContent = left > 0
+      ? `还有 ${formatIdle(left)}`
+      : '未设置';
+    state.className = left > 0 ? 'hint ok' : 'hint';
+  }
+
+  // --- rule count ------------------------------------------------------
+  const rules = config.rules || [];
+  const live = rules.filter((rule) => rule.enabled).length;
+  const ovRules = $('ovRules');
+  if (ovRules) ovRules.textContent = `${rules.length} 条`;
+  const ovRulesHint = $('ovRulesHint');
+  if (ovRulesHint) {
+    ovRulesHint.textContent = rules.length === 0
+      ? '还没有规则，自动化页可以加。'
+      : `${live} 条在用，${rules.length - live} 条停用。`;
+  }
+}
+
+/* The two small status cards on the overview.  They say the same thing
+ * as the strip at the top, at a glance, because "is the thing that
+ * watches my keyboard actually running" is the question a sleep tool
+ * lives or dies by. */
+function renderGuardCards(service) {
+  const guard = $('ovGuard');
+  const guardHint = $('ovGuardHint');
+  const tray = $('ovTray');
+  const trayHint = $('ovTrayHint');
+
+  if (!service) {
+    if (guard) guard.textContent = '未知';
+    if (guardHint) guardHint.textContent = '还读不到后台服务的状态。';
+    if (tray) tray.textContent = '未知';
+    if (trayHint) trayHint.textContent = '';
+    return;
+  }
+
+  if (!service.installed) {
+    if (guard) guard.textContent = '未安装';
+    if (guardHint) guardHint.textContent = '装上之后自动启动，不用每次手动开。';
+  } else if (service.stale) {
+    if (guard) guard.textContent = '要重装';
+    if (guardHint) guardHint.textContent = '程序被移动过，任务还指着旧位置。';
+  } else if (!service.running) {
+    if (guard) guard.textContent = '没在运行';
+    if (guardHint) guardHint.textContent = '现在没人看着空闲时间。';
+  } else if (!service.agent_running) {
+    if (guard) guard.textContent = '半开';
+    if (guardHint) guardHint.textContent = '读不到真实空闲时间，会一直当作你在用。';
+  } else {
+    if (guard) guard.textContent = '正常';
+    if (guardHint) guardHint.textContent = '正在读键盘和鼠标，空闲到点会自己切计划。';
+  }
+
+  if (!service.tray_installed) {
+    if (tray) tray.textContent = '没有';
+    if (trayHint) trayHint.textContent = '托盘图标没装上，只能从这个窗口操作。';
+  } else if (!service.tray_running) {
+    if (tray) tray.textContent = '没起来';
+    if (trayHint) trayHint.textContent = '装上了但这次没运行，重启程序试试。';
+  } else {
+    if (tray) tray.textContent = '已显示';
+    if (trayHint) trayHint.textContent = 'Windows 11 默认把它收在箭头里，拖出来就能一直看到。';
+  }
+}
+
 /* ------------------------------------------------------------- refresh */
 
 async function refresh() {
@@ -671,6 +1040,7 @@ async function refresh() {
   $('activePlan').textContent = data.active_plan || '未知';
 
   $('idleInfo').textContent = '空闲 ' + formatIdle(data.idle_seconds);
+  renderOverview(data);
 
   const dot = $('statusDot');
   if (!data.daemon_running) {
@@ -711,6 +1081,7 @@ async function refresh() {
   renderGpu();
   renderRules(config.rules || []);
   renderGames(config.game_processes || []);
+  syncActionPlanOptions();
 
   const editSelect = $('editPlanSelect');
   const wanted = config.last_plan_guid || data.active_plan_guid || '';
@@ -724,6 +1095,7 @@ async function refresh() {
     service = null;
   }
   renderService(service);
+  renderGuardCards(service);
 }
 
 /* Save one of the number fields.  Each one is a different setting, so
@@ -761,6 +1133,94 @@ function setIfIdle(field, value, active) {
   if (field.dataset && field.dataset.editing === '1') return false;
   field.value = value;
   return true;
+}
+
+/* --------------------------------------------------------- quick actions */
+
+function switchTab(name) {
+  const tab = document.querySelector('.tab[data-tab="' + name + '"]');
+  if (tab) tab.click();
+}
+
+/* The timed "do not sleep" buttons.  Each one writes an end time into
+ * the config, so the promise survives closing this window. */
+function wireOverride() {
+  const bar = $('overrideBar');
+  if (!bar) return;
+
+  for (const button of bar.querySelectorAll('button[data-minutes]')) {
+    button.addEventListener('click', async () => {
+      const minutes = parseInt(button.dataset.minutes, 10) || 0;
+      const state = $('overrideState');
+      if (state) {
+        state.textContent = '设置中…';
+        state.className = 'hint';
+      }
+      let result = null;
+      try {
+        result = await api().set_override(minutes);
+      } catch (err) {
+        result = { ok: false, message: String(err) };
+      }
+      if (state) {
+        state.textContent = result && result.ok
+          ? (result.message || (minutes ? '已设置' : '已取消'))
+          : ((result && result.message) || '没设置成功');
+        state.className = result && result.ok ? 'hint ok' : 'hint bad';
+      }
+      await refresh();
+    });
+  }
+}
+
+function wireLogTools() {
+  const search = $('logSearch');
+  if (search) {
+    search.addEventListener('input', () => {
+      logQuery = search.value.trim();
+      applyLogFilter();
+    });
+  }
+
+  const filter = $('logFilter');
+  if (filter) {
+    for (const item of filter.querySelectorAll('.seg-item')) {
+      item.addEventListener('click', () => {
+        logLevel = item.dataset.level || 'all';
+        for (const other of filter.querySelectorAll('.seg-item')) {
+          other.classList.toggle('active', other === item);
+        }
+        applyLogFilter();
+      });
+    }
+  }
+
+  const more = $('ovMoreLog');
+  if (more) more.addEventListener('click', () => switchTab('logs'));
+}
+
+function wireShortcuts() {
+  document.addEventListener('keydown', (event) => {
+    // Escape closes the process picker.  It has a backdrop now, but a
+    // dialog that cannot be dismissed from the keyboard is one people
+    // get stuck in.
+    if (event.key === 'Escape') {
+      const sheet = $('processSheet');
+      if (sheet && sheet.style && sheet.style.display !== 'none') {
+        closeProcessSheet(null);
+        event.preventDefault();
+      }
+      return;
+    }
+
+    if (!event.ctrlKey || event.altKey || event.metaKey) return;
+    const order = ['overview', 'power', 'rules', 'system', 'logs'];
+    const index = parseInt(event.key, 10) - 1;
+    if (index >= 0 && index < order.length) {
+      switchTab(order[index]);
+      event.preventDefault();
+    }
+  });
 }
 
 /* ---------------------------------------------------------------- wire */
@@ -1008,31 +1468,60 @@ function wire() {
     await refresh();
   });
 
-  $('ruleKind').addEventListener('change', buildConditionValue);
   $('ruleAction').addEventListener('change', buildActionValue);
+
+  $('addConditionBtn').addEventListener('click', () => addConditionRow());
 
   $('ruleForm').addEventListener('submit', async (event) => {
     event.preventDefault();
+    const hint = $('ruleFormHint');
     const name = $('ruleName').value.trim();
-    if (!name) return;
+    if (!name) {
+      if (hint) {
+        hint.textContent = '先给规则起个名字。';
+        hint.className = 'hint bad';
+      }
+      return;
+    }
 
-    const kind = $('ruleKind').value;
-    const value = conditionValue();
+    // Every condition row the user left filled in becomes a condition.
+    // An empty row is skipped rather than sent as an empty string, which
+    // the daemon would have to guess about.
+    const conditions = readConditions();
     const actionKind = $('ruleAction').value;
     const actionBox = $('ruleActionValue');
     const actionValue = actionBox ? actionBox.value.trim() : '';
+    const priorityBox = $('rulePriority');
+    const priority = priorityBox ? parseInt(priorityBox.value, 10) || 0 : 0;
+
+    if (actionKind === 'set_power_plan' && !actionValue) {
+      if (hint) {
+        hint.textContent = '选一个要切过去的计划。';
+        hint.className = 'hint bad';
+      }
+      return;
+    }
 
     const result = await api().add_rule({
       name,
-      conditions: value ? [{ kind, value }] : [],
+      conditions,
       action: { kind: actionKind, value: actionValue },
       enabled: true,
-      priority: 0,
+      priority,
     });
+
+    if (hint) {
+      hint.textContent = result.ok
+        ? `加好了，共 ${conditions.length} 条条件。`
+        : (result.message || '没加上');
+      hint.className = result.ok ? 'hint ok' : 'hint bad';
+    }
 
     if (result.ok) {
       $('ruleName').value = '';
-      buildConditionValue();
+      $('ruleConditions').innerHTML = '';
+      addConditionRow();
+      if (priorityBox) priorityBox.value = '0';
     }
     await refresh();
   });
@@ -1048,7 +1537,10 @@ function wire() {
     loadProcesses(event.target.value);
   });
 
-  buildConditionValue();
+  wireOverride();
+  wireLogTools();
+  wireShortcuts();
+  addConditionRow();
   buildActionValue();
 }
 
@@ -1060,19 +1552,27 @@ async function renderOwnPlans() {
   const result = await api().own_plans();
   const plans = (result && result.plans) || [];
   area.innerHTML = '';
+  if (plans.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'empty';
+    empty.textContent = '这一版没有附带任何计划。';
+    area.appendChild(empty);
+    return;
+  }
+
   for (const plan of plans) {
     const card = document.createElement('div');
-    card.className = 'card glass';
+    card.className = 'own-plan';
     const label = document.createElement('div');
-    label.className = 'card-label';
+    label.className = 'own-plan-name';
     label.textContent = plan.name;
     const note = document.createElement('div');
-    note.className = 'card-value';
+    note.className = 'own-plan-desc';
     note.textContent = plan.description || '';
     const actions = document.createElement('div');
     actions.className = 'card-actions';
     const button = document.createElement('button');
-    button.className = 'btn';
+    button.className = 'btn small';
     button.textContent = '创建';
     button.addEventListener('click', async () => {
       button.disabled = true;
@@ -1148,10 +1648,62 @@ async function pollLog() {
   if (logLines.length > LOG_MAX_ON_SCREEN) {
     logLines = logLines.slice(logLines.length - LOG_MAX_ON_SCREEN);
   }
+  applyLogFilter();
+}
+
+/* Draw the log with the current filter, and keep the overview feed in
+ * step with it.  Both read the same buffer: the overview shows the last
+ * few lines, the log page shows everything. */
+function applyLogFilter() {
+  let shown = logLines;
+  if (LOG_LEVELS[logLevel]) {
+    shown = shown.filter((line) => LOG_LEVELS[logLevel].test(line));
+  }
+  if (logQuery) {
+    const needle = logQuery.toLowerCase();
+    shown = shown.filter((line) => line.toLowerCase().includes(needle));
+  }
+
   const view = $('logView');
-  view.textContent = logLines.join('\n');
-  if (logFollow) {
-    view.scrollTop = view.scrollHeight;
+  if (view) {
+    view.textContent = shown.join('\n');
+    if (logFollow) view.scrollTop = view.scrollHeight;
+  }
+
+  const count = $('logCount');
+  if (count) {
+    const filtered = shown.length !== logLines.length;
+    count.textContent = filtered
+      ? `显示 ${shown.length} / ${logLines.length} 行`
+      : `${logLines.length} 行`;
+  }
+
+  renderOverviewFeed();
+}
+
+/* The last few lines, on the overview.  Picking the last ones rather
+ * than the first means the newest thing that happened is what you see. */
+function renderOverviewFeed() {
+  const feed = $('overviewLog');
+  if (!feed) return;
+  feed.innerHTML = '';
+
+  if (logLines.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'empty';
+    empty.textContent = '还没有日志。';
+    feed.appendChild(empty);
+    return;
+  }
+
+  const tail = logLines.slice(-6);
+  for (const line of tail) {
+    const row = document.createElement('div');
+    row.className = 'feed-line';
+    if (LOG_LEVELS.error.test(line)) row.className += ' error';
+    else if (LOG_LEVELS.warn.test(line)) row.className += ' warn';
+    row.textContent = line;
+    feed.appendChild(row);
   }
 }
 
@@ -1160,6 +1712,10 @@ window.addEventListener('pywebviewready', () => {
   refresh().then(() => {
     const guid = guidOfPlan($('editPlanSelect').value);
     renderPlanSettings(guid);
+    // The overview shows the tail of the log, and the log is only read
+    // while its own page is open.  Read it once at startup so the feed
+    // is not empty until the user visits the log page.
+    pollLog().then(renderOverviewFeed);
   });
   setInterval(refresh, 5000);
 });

@@ -87,6 +87,10 @@ class StateServer:
         self.agent = AgentState()
         #: Called with the new agent state whenever the agent reports.
         self.on_agent_update: Callable[[AgentState], None] | None = None
+        #: Returns what the loop decided on its last tick.  The server
+        #: owns the socket, the loop owns the decision - the window asks
+        #: the server, which asks this.
+        self.on_status: Callable[[], dict[str, Any]] | None = None
 
     @property
     def port(self) -> int:
@@ -150,6 +154,16 @@ class StateServer:
                     except OSError:
                         return
 
+    def _status(self) -> bytes:
+        """Ask whoever owns the decision what it decided."""
+        if self.on_status is None:
+            return json.dumps({"ok": False, "message": "not decided yet"}).encode("utf-8")
+        try:
+            return json.dumps(self.on_status()).encode("utf-8")
+        except Exception:  # noqa: BLE001 - the window must still get an answer
+            log.exception("the status could not be built")
+            return json.dumps({"ok": False, "message": "status failed"}).encode("utf-8")
+
     def _dispatch(self, line: bytes) -> bytes:
         try:
             message = json.loads(line.decode("utf-8"))
@@ -159,6 +173,8 @@ class StateServer:
         kind = message.get("kind")
         if kind == "ping":
             return json.dumps({"ok": True, "kind": "pong"}).encode("utf-8")
+        if kind == "status":
+            return self._status()
         if kind == "set_plan_settings":
             return self._set_plan_settings(message)
         if kind == "duplicate_plan":
@@ -295,6 +311,14 @@ class Daemon:
         self._current_plan: str | None = None
         self._stop = threading.Event()
         self._last_intent: Intent | None = None
+
+        #: What the loop decided on its most recent tick.  ``_last_intent``
+        #: only changes when the *decision* changes, so it is not a good
+        #: answer to "what is the program doing right now" - its reason
+        #: can be half an hour old.  This one is rewritten every tick.
+        self._current_intent: Intent | None = None
+        self._current_intent_at: float = 0.0
+        self._server.on_status = self._status
         #: How many times in a row restoring the power plan failed.
         self._plan_failures = 0
         #: Set when another program seems to hold the power plan.
@@ -370,10 +394,35 @@ class Daemon:
 
     # -- the loop ---------------------------------------------------------
 
+    def _status(self) -> dict[str, Any]:
+        """What the loop is doing right now, for the window to show.
+
+        ``Intent.reason`` has always been documented as "shown in the
+        UI", but nothing ever sent it there - the window could say which
+        plan is active and not why.  For a program whose whole job is
+        making that decision, the why is the interesting half.
+        """
+        intent = self._current_intent
+        if intent is None:
+            return {"ok": False, "message": "not decided yet"}
+        return {
+            "ok": True,
+            "plan": intent.plan or "",
+            "keep_awake": intent.keep_awake,
+            "lock_screen": intent.lock_screen,
+            "lock_in": intent.lock_in,
+            "reason": intent.reason,
+            "at": self._current_intent_at,
+            "agent_idle": self._server.agent.idle_seconds,
+            "agent_fresh": self._server.agent.is_fresh(),
+        }
+
     def _tick(self) -> None:
         config = config_mod.load(self._config_path)
         self._trim_log(config)
         intent = self._decide(config)
+        self._current_intent = intent
+        self._current_intent_at = time.time()
         if not self._same_decision(intent, self._last_intent):
             log.info(
                 "the plan should be %s (%s)",
@@ -458,6 +507,16 @@ class Daemon:
             # the active plan and hold the machine awake if the user
             # asked for it.
             log.debug("the agent has not reported recently")
+            # A timed override does not need the idle time to be
+            # trustworthy - the user asked for it by hand, so honour it
+            # even when the idle number is the thing that is missing.
+            remaining = config.keep_awake_until - time.time()
+            if remaining > 0:
+                return Intent(
+                    plan=None,
+                    keep_awake=True,
+                    reason=f"timed override, {int(remaining // 60)} min left",
+                )
             return Intent(
                 plan=None,
                 keep_awake=config.keep_awake or config.server_mode,
@@ -488,6 +547,7 @@ class Daemon:
             server_mode=config.server_mode,
             server_lock_seconds=config.server_lock_seconds,
             phase=self._phase,
+            override_until=config.keep_awake_until,
         )
 
         return self._apply_rules(config, snap, intent)

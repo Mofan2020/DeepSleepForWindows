@@ -28,28 +28,93 @@
     </div>
   </header>
 
-  <section class="panel glass service">
-    <div class="service-head">
-      <div class="grow">
-        <h2>后台服务</h2>
-        <p class="muted" id="serviceText">正在检查…</p>
-      </div>
-      <div class="service-actions" id="serviceActions"></div>
+  <!-- 后台服务：不出问题时只占一行 -->
+  <section class="strip glass" id="serviceStrip">
+    <span class="dot small" id="serviceDot"></span>
+    <div class="strip-text">
+      <span id="serviceText">正在检查…</span>
+      <span class="strip-hint" id="serviceHint"></span>
     </div>
-    <p class="hint" id="serviceHint"></p>
+    <div class="strip-actions" id="serviceActions"></div>
   </section>
 
   <nav class="tabs glass" id="tabs">
-    <button class="tab active" data-tab="power">电源</button>
+    <button class="tab active" data-tab="overview">概览</button>
+    <button class="tab" data-tab="power">电源</button>
     <button class="tab" data-tab="rules">自动化</button>
     <button class="tab" data-tab="system">系统</button>
     <button class="tab" data-tab="logs">日志</button>
   </nav>
 
-  <!-- ------------------------------------------------------------ 电源 -->
-  <section class="page" id="page-power">
+  <!-- ------------------------------------------------------------ 概览 -->
+  <section class="page" id="page-overview">
 
-    <div class="cards">
+    <div class="hero glass">
+      <div class="hero-main">
+        <div class="hero-label">现在</div>
+        <div class="hero-value" id="heroPlan">读取中…</div>
+        <div class="hero-why" id="heroWhy">正在向后台询问为什么。</div>
+        <div class="hero-chips" id="heroChips"></div>
+      </div>
+      <div class="hero-side">
+        <div class="idle-num" id="heroIdle">--</div>
+        <div class="idle-cap">已经空闲</div>
+        <div class="idle-track"><span class="idle-fill" id="idleBar"></span></div>
+        <div class="idle-cap" id="heroThreshold">--</div>
+      </div>
+    </div>
+
+    <div class="panel glass">
+      <div class="panel-head">
+        <div class="grow">
+          <h2>临时不睡觉</h2>
+          <p class="muted">到点自动恢复，不用记着回来关。关掉这个窗口也照样有效。</p>
+        </div>
+        <span class="hint" id="overrideState">未设置</span>
+      </div>
+      <div class="quick" id="overrideBar">
+        <button class="btn" data-minutes="30">30 分钟</button>
+        <button class="btn" data-minutes="60">1 小时</button>
+        <button class="btn" data-minutes="120">2 小时</button>
+        <button class="btn" data-minutes="480">8 小时</button>
+        <button class="btn ghost" data-minutes="0">取消</button>
+      </div>
+    </div>
+
+    <div class="cards three">
+      <div class="card glass">
+        <div class="card-label">守护</div>
+        <div class="card-value" id="ovGuard">--</div>
+        <p class="hint" id="ovGuardHint"></p>
+      </div>
+      <div class="card glass">
+        <div class="card-label">托盘图标</div>
+        <div class="card-value" id="ovTray">--</div>
+        <p class="hint" id="ovTrayHint"></p>
+      </div>
+      <div class="card glass">
+        <div class="card-label">规则</div>
+        <div class="card-value" id="ovRules">--</div>
+        <p class="hint" id="ovRulesHint"></p>
+      </div>
+    </div>
+
+    <div class="panel glass">
+      <div class="panel-head">
+        <div class="grow">
+          <h2>最近发生了什么</h2>
+          <p class="muted">最后几条日志，点进去看全部。</p>
+        </div>
+        <button class="btn ghost" id="ovMoreLog">全部日志</button>
+      </div>
+      <div class="feed" id="overviewLog"></div>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------ 电源 -->
+  <section class="page" id="page-power" hidden>
+
+    <div class="cards two">
       <div class="card glass">
         <div class="card-label">当前电源计划</div>
         <div class="card-value" id="currentPlan">读取中…</div>
@@ -60,20 +125,24 @@
       </div>
 
       <div class="card glass">
-        <div class="card-label">空闲时切换到</div>
-        <div class="card-value" id="idlePlanValue">未设置</div>
-        <div class="card-actions">
-          <span class="hint">空闲 <input id="idleMinutes" class="num" type="number" min="1" step="1"> 分钟后切到</span>
-          <select id="idlePlanSelect" class="select"></select>
-        </div>
-        <p class="hint">单位是分钟，1 分钟 = 60 秒。</p>
-      </div>
-
-      <div class="card glass">
         <div class="card-label">活跃时切换到</div>
         <div class="card-value" id="activePlanValue">未设置</div>
         <div class="card-actions">
           <select id="activePlanSelect" class="select"></select>
+        </div>
+        <p class="hint">在键盘前、或者游戏在跑的时候用这个计划。</p>
+      </div>
+
+      <div class="card glass">
+        <div class="card-label">空闲时切换到</div>
+        <div class="card-value" id="idlePlanValue">未设置</div>
+        <div class="card-actions">
+          <select id="idlePlanSelect" class="select"></select>
+        </div>
+        <div class="rule-block tight">
+          <span class="hint">空闲</span>
+          <input id="idleMinutes" class="num" type="number" min="1" step="1">
+          <span class="hint">分钟就算离开</span>
         </div>
       </div>
 
@@ -81,16 +150,19 @@
         <div class="card-label">空闲判定</div>
         <div class="card-value" id="cpuValue">--</div>
         <div class="card-actions">
-          <span class="hint">CPU 低于 <input id="idleCpu" class="num" type="number" min="0" max="100" step="1"> % 才算空闲</span>
+          <span class="hint">CPU 低于</span>
+          <input id="idleCpu" class="num" type="number" min="0" max="100" step="1">
+          <span class="hint">% 才算空闲</span>
         </div>
+        <p class="hint">有空闲时长还不够。后台在跑东西的时候不该降频。</p>
       </div>
     </div>
 
     <div class="panel glass">
       <div class="panel-head">
         <div class="grow">
-          <h2>电源计划</h2>
-          <p class="muted">改一个计划里的具体内容，比如多久关屏幕、多久睡觉。</p>
+          <h2>改一个计划</h2>
+          <p class="muted">多久关屏幕、多久睡觉，都在这一个计划里。</p>
         </div>
         <div class="row-actions">
           <select id="editPlanSelect" class="select"></select>
@@ -114,10 +186,10 @@
       <div class="panel-head">
         <div class="grow">
           <h2>程序自带的电源计划</h2>
-          <p class="muted">两个现成的计划，比系统自带的更极端。</p>
+          <p class="muted">两个现成的计划，比系统自带的更极端。要用就复制一份出来。</p>
         </div>
       </div>
-      <div id="ownPlanList" class="cards"></div>
+      <div id="ownPlanList" class="own-plans"></div>
     </div>
 
     <div class="panel glass">
@@ -135,58 +207,84 @@
     </div>
 
     <div class="panel glass">
-      <h2>游戏进程</h2>
-      <p class="muted">这些程序在跑的时候，机器保持高性能，而且不休眠。</p>
-      <div id="gameList" class="chips"></div>
-      <div class="row-actions">
+      <div class="panel-head">
+        <div class="grow">
+          <h2>游戏进程</h2>
+          <p class="muted">这些程序在跑的时候，机器保持高性能，而且不休眠。</p>
+        </div>
         <button class="btn" id="addGameBtn">选择进程</button>
       </div>
+      <div id="gameList" class="chips"></div>
     </div>
   </section>
 
   <!-- ---------------------------------------------------------- 自动化 -->
   <section class="page" id="page-rules" hidden>
     <div class="panel glass">
-      <h2>自动化规则</h2>
-      <p class="muted">当所有条件同时成立时执行动作。</p>
+      <div class="panel-head">
+        <div class="grow">
+          <h2>自动化规则</h2>
+          <p class="muted">条件全部成立时才执行。多条条件按顺序全部满足，数字越大越先执行。</p>
+        </div>
+      </div>
       <div id="ruleList" class="rules"></div>
+    </div>
+
+    <div class="panel glass">
+      <div class="panel-head">
+        <div class="grow">
+          <h2>加一条规则</h2>
+          <p class="muted">条件可以加好几条，比如「星期一到星期五」加上「九点到十八点」。</p>
+        </div>
+      </div>
 
       <form id="ruleForm" class="rule-form">
-        <input class="text" id="ruleName" placeholder="规则名称">
-
         <div class="rule-block">
-          <span class="rule-label">条件</span>
-          <select id="ruleKind" class="select">
-            <option value="idle_at_least">空闲至少</option>
-            <option value="idle_below">空闲少于</option>
-            <option value="cpu_below">CPU 低于</option>
-            <option value="cpu_above">CPU 高于</option>
-            <option value="process_running">进程运行中</option>
-            <option value="time_window">时间窗口</option>
-            <option value="day_of_week">星期</option>
-          </select>
-          <div id="ruleValueArea" class="rule-value"></div>
+          <span class="rule-label">名称</span>
+          <input class="text" id="ruleName" placeholder="比如：上班时间保持唤醒">
+        </div>
+
+        <div class="rule-section">
+          <div class="rule-section-head">
+            <span class="rule-label">条件</span>
+            <span class="hint">全部成立才算命中</span>
+          </div>
+          <div id="ruleConditions" class="cond-list"></div>
+          <button class="btn ghost small" type="button" id="addConditionBtn">再加一条条件</button>
+        </div>
+
+        <div class="rule-section">
+          <div class="rule-section-head">
+            <span class="rule-label">动作</span>
+          </div>
+          <div class="rule-block">
+            <select id="ruleAction" class="select">
+              <option value="set_power_plan">切换电源计划</option>
+              <option value="keep_awake">保持唤醒</option>
+              <option value="lock_screen">锁屏</option>
+              <option value="run_command">运行程序</option>
+            </select>
+            <div id="ruleActionArea" class="rule-value"></div>
+          </div>
         </div>
 
         <div class="rule-block">
-          <span class="rule-label">动作</span>
-          <select id="ruleAction" class="select">
-            <option value="set_power_plan">切换电源计划</option>
-            <option value="keep_awake">保持唤醒</option>
-            <option value="lock_screen">锁屏</option>
-            <option value="run_command">运行程序</option>
-          </select>
-          <div id="ruleActionArea" class="rule-value"></div>
+          <span class="rule-label">优先级</span>
+          <input class="num" id="rulePriority" type="number" min="0" step="1" value="0">
+          <span class="hint">数字大的先执行，相同则按添加顺序</span>
         </div>
 
-        <button class="btn primary" type="submit">添加规则</button>
+        <div class="rule-block">
+          <button class="btn primary" type="submit">添加规则</button>
+          <span class="hint" id="ruleFormHint"></span>
+        </div>
       </form>
     </div>
   </section>
 
   <!-- ------------------------------------------------------------ 系统 -->
   <section class="page" id="page-system" hidden>
-    <div class="cards">
+    <div class="cards two">
       <div class="card glass">
         <div class="card-label">保持唤醒</div>
         <div class="card-value" id="keepAwakeValue">关闭</div>
@@ -196,6 +294,7 @@
             <span>让机器不休眠</span>
           </label>
         </div>
+        <p class="hint">一直有效，直到你手动关掉。想临时用一会儿就回概览点计时。</p>
       </div>
 
       <div class="card glass">
@@ -206,7 +305,11 @@
             <input type="checkbox" id="serverToggle">
             <span>持续防睡眠</span>
           </label>
-          <span class="hint">空闲 <input id="serverLockMinutes" class="num" type="number" min="1" step="1"> 分钟后锁屏</span>
+        </div>
+        <div class="rule-block tight">
+          <span class="hint">空闲</span>
+          <input id="serverLockMinutes" class="num" type="number" min="1" step="1">
+          <span class="hint">分钟后锁屏</span>
         </div>
       </div>
 
@@ -214,7 +317,8 @@
         <div class="card-label">定时睡眠</div>
         <div class="card-value" id="scheduleValue">未设置</div>
         <div class="card-actions">
-          <span class="hint">在 <input id="sleepClock" class="num" type="time"> 睡觉</span>
+          <span class="hint">在</span>
+          <input id="sleepClock" class="num" type="time">
           <button class="btn" id="scheduleBtn">设置</button>
           <button class="btn ghost" id="cancelScheduleBtn">取消</button>
         </div>
@@ -248,11 +352,16 @@
     </div>
 
     <div class="panel glass">
-      <h2>维护</h2>
-      <div class="toolbar">
-        <button class="btn ghost" id="refreshBtn">刷新</button>
-        <button class="btn ghost" id="updateBtn">检查更新</button>
-        <button class="btn ghost" id="uninstallBtn">卸载后台服务</button>
+      <div class="panel-head">
+        <div class="grow">
+          <h2>维护</h2>
+          <p class="muted">检查更新、重读状态、卸载后台服务。</p>
+        </div>
+        <div class="row-actions">
+          <button class="btn ghost" id="refreshBtn">刷新</button>
+          <button class="btn ghost" id="updateBtn">检查更新</button>
+          <button class="btn ghost" id="uninstallBtn">卸载后台服务</button>
+        </div>
       </div>
       <p class="hint" id="updateHint"></p>
     </div>
@@ -265,7 +374,8 @@
         <div class="grow">
           <h2>日志</h2>
           <p class="muted">进这个页面就开始实时显示，不用点读取。</p>
-        </div>        <div class="row-actions">
+        </div>
+        <div class="row-actions">
           <label class="switch">
             <input type="checkbox" id="logFollowToggle" checked>
             <span>自动滚动</span>
@@ -274,24 +384,43 @@
           <button class="btn ghost" id="clearLogBtn">清空日志</button>
         </div>
       </div>
+
+      <div class="log-toolbar">
+        <input class="text" id="logSearch" placeholder="搜索日志内容">
+        <div class="seg" id="logFilter">
+          <button class="seg-item active" data-level="all">全部</button>
+          <button class="seg-item" data-level="warn">警告</button>
+          <button class="seg-item" data-level="error">错误</button>
+        </div>
+        <span class="hint" id="logCount"></span>
+      </div>
+
       <pre class="log" id="logView"></pre>
       <p class="hint" id="logHint"></p>
     </div>
 
     <div class="panel glass">
-      <h2>自动清理</h2>
-      <p class="muted">日志超过限制时自动删掉旧的部分。填 0 表示不限。</p>
-      <div class="cards">
+      <div class="panel-head">
+        <div class="grow">
+          <h2>自动清理</h2>
+          <p class="muted">日志超过限制时自动删掉旧的部分。填 0 表示不限。</p>
+        </div>
+      </div>
+      <div class="cards two">
         <div class="card glass">
           <div class="card-label">最多保留行数</div>
           <div class="card-actions">
-            <span class="hint">保留 <input id="logMaxLines" class="num" type="number" min="0" step="100"> 行</span>
+            <span class="hint">保留</span>
+            <input id="logMaxLines" class="num" type="number" min="0" step="100">
+            <span class="hint">行</span>
           </div>
         </div>
         <div class="card glass">
           <div class="card-label">最多保留天数</div>
           <div class="card-actions">
-            <span class="hint">保留 <input id="logMaxDays" class="num" type="number" min="0" step="1"> 天</span>
+            <span class="hint">保留</span>
+            <input id="logMaxDays" class="num" type="number" min="0" step="1">
+            <span class="hint">天</span>
           </div>
         </div>
       </div>

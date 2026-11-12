@@ -166,6 +166,17 @@ class Bridge:
 
         daemon = self._daemon_request({"kind": "ping"})
 
+        # Ask the daemon what it decided and why.  A running daemon that
+        # has not decided yet answers ``ok: false``; both "no daemon" and
+        # "no decision" end up as ``None`` here, which the window shows as
+        # "not decided" instead of inventing a reason.
+        intent = None
+        if daemon is not None:
+            answer = self._daemon_request({"kind": "status"})
+            if answer is not None and answer.get("ok"):
+                intent = answer
+
+        now = time.time()
         return {
             "config": config.to_dict(),
             "plans": [name for name, _ in plans],
@@ -174,6 +185,9 @@ class Bridge:
             "active_plan_guid": active[1] if active else "",
             "daemon_running": daemon is not None,
             "idle_seconds": winapi.idle_seconds(),
+            "intent": intent,
+            "override_remaining": max(0, int(config.keep_awake_until - now)),
+            "server_now": now,
             "now": time.strftime("%H:%M:%S"),
         }
 
@@ -194,6 +208,36 @@ class Bridge:
         config.server_mode = bool(enabled)
         self._save(config)
         return {"ok": True, "server_mode": config.server_mode}
+
+    def set_override(self, minutes: int) -> dict[str, Any]:
+        """Hold the machine awake for a while, then let it go on its own.
+
+        The end time is written into the config rather than kept in the
+        window, so closing the window does not quietly cancel it and
+        restarting the program does not quietly extend it.
+        """
+        config = self._load()
+        try:
+            wanted = int(minutes)
+        except (TypeError, ValueError):
+            wanted = 0
+
+        if wanted <= 0:
+            config.keep_awake_until = 0.0
+            self._save(config)
+            return {"ok": True, "minutes": 0, "remaining": 0, "message": "已取消"}
+
+        until = time.time() + wanted * 60
+        config.keep_awake_until = until
+        self._save(config)
+        hours, rest = divmod(wanted, 60)
+        shown = f"{hours} 小时 {rest} 分钟" if hours else f"{rest} 分钟"
+        return {
+            "ok": True,
+            "minutes": wanted,
+            "remaining": wanted * 60,
+            "message": f"接下来 {shown}不睡觉",
+        }
 
     def set_keep_awake(self, enabled: bool) -> dict[str, Any]:
         """Hold the machine awake, or stop doing that."""

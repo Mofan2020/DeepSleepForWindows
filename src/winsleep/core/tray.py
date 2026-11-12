@@ -213,6 +213,7 @@ def run_tray(
     plan_choices: Callable[[], list[tuple[str, str]]] | None = None,
     on_switch: Callable[[str], None] | None = None,
     heartbeat: Callable[[], None] | None = None,
+    on_override: Callable[[int], None] | None = None,
 ) -> int:
     """Show the icon and stay in the notification area until it is left.
 
@@ -221,6 +222,12 @@ def run_tray(
     that are put into the menu, and *on_switch* switches to the one
     that was picked.  *heartbeat* is called while the icon is up, so
     the rest of the program can tell the tray is alive.
+
+    *on_override* is called with a number of minutes to hold the
+    machine awake, or zero to let it go.  A sleep tool that cannot be
+    told "not now" without opening a window is a sleep tool people stop
+    using, so this is in the right-click menu rather than only in the
+    window.
     """
     if sys.platform != "win32":
         log.info("the notification area is only available on Windows")
@@ -260,6 +267,27 @@ def run_tray(
         pystray.MenuItem("立即锁屏", lambda: on_lock()),
         pystray.Menu.SEPARATOR,
     ]
+
+    # "Not now" is the thing people reach for most, so it comes before
+    # the plan list.  Zero means cancel.
+    if on_override is not None:
+        holds = [(30, "30 分钟"), (60, "1 小时"), (120, "2 小时"), (480, "8 小时")]
+        entries = [
+            pystray.MenuItem(
+                label,
+                lambda _icon=None, _item=None, minutes=minutes: on_override(minutes),
+            )
+            for minutes, label in holds
+        ]
+        entries.append(pystray.Menu.SEPARATOR)
+        entries.append(
+            pystray.MenuItem(
+                "取消，让它照常睡",
+                lambda _icon=None, _item=None: on_override(0),
+            )
+        )
+        items.append(pystray.MenuItem("保持唤醒", pystray.Menu(*entries)))
+        items.append(pystray.Menu.SEPARATOR)
 
     if plan_choices is not None and on_switch is not None:
         try:
