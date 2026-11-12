@@ -289,6 +289,47 @@ def test_notification_area_is_exported() -> None:
     assert "notification_area_ready" in winapi.__all__
 
 
+def test_doctor_reports_the_tray(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`doctor` has to answer "is the icon task even installed?".
+
+    Without it the only two answers available are "the icon is missing"
+    and "the icon is missing", which is not a diagnosis.
+    """
+    from winsleep import cli
+
+    monkeypatch.setattr(
+        "winsleep.core.install.service_status",
+        lambda: {
+            "installed": True,
+            "running": True,
+            "agent_running": True,
+            "tray_installed": True,
+            "tray_running": False,
+        },
+    )
+
+    class FakeBridge:
+        def get_state(self):
+            return {"daemon_running": True, "active_plan": "", "idle_seconds": 0, "config": {}, "plans": []}
+
+    # Bridge is imported inside the function, so it is patched where it lives.
+    monkeypatch.setattr("winsleep.gui.bridge.Bridge", lambda: FakeBridge())
+    from pathlib import Path
+
+    monkeypatch.setattr("winsleep.core.paths.app_dir", lambda: Path("/tmp"))
+    monkeypatch.setattr("winsleep.core.paths.config_path", lambda: Path("/tmp/c.json"))
+    monkeypatch.setattr("winsleep.core.paths.log_path", lambda: Path("/tmp/l.log"))
+
+    import argparse
+
+    cli._cmd_doctor(argparse.Namespace())
+    out = capsys.readouterr().out
+    assert "tray task:" in out
+    assert "tray alive:" in out
+
+
 # ------------------------------------------------------------- icon drawing
 
 

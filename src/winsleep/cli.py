@@ -624,6 +624,11 @@ def _cmd_doctor(_args: argparse.Namespace) -> int:
     print(f"  installed:   {status.get('installed')}")
     print(f"  running:     {status.get('running')}")
     print(f"  agent:       {status.get('agent_running')}")
+    # The tray is its own task and fails on its own.  Without this line
+    # "the icon is not there" cannot be told apart from "the icon task was
+    # never installed", which is the question that gets asked first.
+    print(f"  tray task:   {status.get('tray_installed')}")
+    print(f"  tray alive:  {status.get('tray_running')}")
 
     print("")
     print("the daemon:")
