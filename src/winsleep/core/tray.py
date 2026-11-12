@@ -225,6 +225,32 @@ def watch_notification_area(
         stop.wait(interval)
 
 
+def _callback(handler: Callable[..., None], argument: Any) -> Callable[..., None]:
+    """Wrap ``handler(argument)`` into the shape pystray accepts.
+
+    **pystray counts parameters and rejects anything over two.**
+
+    ``MenuItem._assert_action`` reads ``action.__code__.co_argcount``: what
+    it can prove safe is "takes no arguments" (wrapped), "takes one"
+    (wrapped), or "takes exactly two".  Three or more is answered with
+    ``raise ValueError(action)`` — it raises *the function object itself*,
+    so the message is a lambda repr and nothing else:
+
+        the notification area icon is not available:
+        <function build_menu.<locals>.<listcomp>.<lambda> at 0x...>
+
+    A lambda carrying its argument as a default
+    (``lambda _icon=None, _item=None, minutes=30: ...``) counts as **three**
+    parameters even though it can be called with two, so it is rejected.
+    The argument therefore has to live in a closure, not in the signature.
+    """
+
+    def _act(_icon: Any = None, _item: Any = None) -> None:
+        handler(argument)
+
+    return _act
+
+
 def build_menu(
     *,
     on_show: Callable[[], None],
@@ -255,19 +281,11 @@ def build_menu(
     if on_override is not None:
         holds = [(30, "30 分钟"), (60, "1 小时"), (120, "2 小时"), (480, "8 小时")]
         entries = [
-            pystray.MenuItem(
-                label,
-                lambda _icon=None, _item=None, minutes=minutes: on_override(minutes),
-            )
+            pystray.MenuItem(label, _callback(on_override, minutes))
             for minutes, label in holds
         ]
         entries.append(pystray.Menu.SEPARATOR)
-        entries.append(
-            pystray.MenuItem(
-                "取消，让它照常睡",
-                lambda _icon=None, _item=None: on_override(0),
-            )
-        )
+        entries.append(pystray.MenuItem("取消，让它照常睡", _callback(on_override, 0)))
         items.append(pystray.MenuItem("保持唤醒", pystray.Menu(*entries)))
         items.append(pystray.Menu.SEPARATOR)
 
@@ -282,12 +300,7 @@ def build_menu(
         if plans:
             entries = []
             for name, guid in plans:
-                entries.append(
-                    pystray.MenuItem(
-                        name,
-                        lambda _icon=None, _item=None, target=guid: switch(target),
-                    )
-                )
+                entries.append(pystray.MenuItem(name, _callback(switch, guid)))
             items.append(pystray.MenuItem("切换电源计划", pystray.Menu(*entries)))
             items.append(pystray.Menu.SEPARATOR)
 

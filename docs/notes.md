@@ -760,3 +760,46 @@ Win32 调用有没有声明 `argtypes`。这条测试当场又揪出三处漏的
 - 启动时 `retire_tray_task()` 把老版本留下的任务删掉、把残留进程杀干净。
 
 `tray_installed()` 现在只回答「有没有老的遗留任务」，不再代表图标在不在。
+## 0.5.3：托盘为什么从来没出现过，以及电源设置面板
+
+### 托盘：pystray 数参数，多一个就把函数本身抛出来
+
+真机日志：
+
+```
+the notification area icon is not available:
+<function build_menu.<locals>.<listcomp>.<lambda> at 0x...>
+```
+
+pystray 的 `MenuItem._assert_action` 会读 `action.__code__.co_argcount`：
+0 个参数自动包一层、1 个包一层、2 个原样用，**3 个以上直接
+`raise ValueError(action)`**——抛的是函数对象本身，所以那句日志里除了
+一串 lambda repr 什么都没有。
+
+而我们的写法正好是三个：
+
+```python
+lambda _icon=None, _item=None, minutes=minutes: on_override(minutes)
+```
+
+把参数写成默认值也算进 `co_argcount`，所以它看着能接两个参数、实际数出来
+是三个。改成闭包 `_callback(handler, argument)`，签名固定两个。
+
+**这一条也解释了为什么 0.5.1 和 0.5.2 的托盘都没出现过**：不是进程没起，
+是菜单一构造就抛，`start_icon` 直接返回 None。而且异常信息里没有一句
+人话，所以两次都被当成「托盘机制没写对」。
+
+测试用了一个模仿 pystray 这条规矩的假 `MenuItem`（`co_argcount > 2` 就
+`ValueError(action)`），再犯会当场红。
+
+### 电源设置面板：读失败时一片空白
+
+`renderPlanSettings()` 先把 `box.innerHTML = ''`，然后 `await
+api().plan_settings(guid)`。对面抛出时整个函数中断——面板已经清空，
+不回填、不提示，用户看到的就是「点哪个计划下面都不变」。
+
+现在两条：出错就把原因写在面板里；成功时第一行写「正在编辑：<计划名>」，
+换计划会跟着变，一眼知道刷没刷新。
+
+后端也记一行 `plan settings for <名字> (<guid>): N 行`。读成 0 行和读成
+旧值，修法完全不同，光看界面分不出来。

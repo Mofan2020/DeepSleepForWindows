@@ -551,6 +551,15 @@ function renderGames(games) {
 
 let planChanges = {};
 
+/** 编辑器下拉框里当前选中项的名字（用来显示「正在编辑：xxx」）。 */
+function selectedPlanName() {
+  const select = $('editPlanSelect');
+  if (!select || !select.options) return '';
+  const index = select.selectedIndex;
+  const option = index >= 0 ? select.options[index] : null;
+  return option ? String(option.textContent || '') : '';
+}
+
 async function renderPlanSettings(guid) {
   const box = $('planSettings');
   const bar = $('planSaveBar');
@@ -566,7 +575,22 @@ async function renderPlanSettings(guid) {
     return;
   }
 
-  const result = await api().plan_settings(guid);
+  // **面板已经清空了，所以这里出错必须说出来。**
+  //
+  // 以前直接 `await`：对面抛出（或者压根没实现）时整个函数中断，
+  // 而 box 在开头就被清空——用户看到的是「下面一片空，点哪个计划都
+  // 不刷新」，没有任何提示。这正是「选了计划但下面不变」的样子。
+  let result;
+  try {
+    result = await api().plan_settings(guid);
+  } catch (err) {
+    const failed = document.createElement('p');
+    failed.className = 'empty';
+    failed.textContent = '电源设置读取失败：' + ((err && err.message) || err);
+    box.appendChild(failed);
+    bar.hidden = true;
+    return;
+  }
   const rows = (result && result.settings) || [];
   if (rows.length === 0) {
     const empty = document.createElement('p');
@@ -576,6 +600,12 @@ async function renderPlanSettings(guid) {
     bar.hidden = true;
     return;
   }
+  // 告诉用户「下面是哪个计划的内容」。换计划时这一行会跟着变，
+  // 一眼就能看出到底刷没刷新。
+  const which = document.createElement('p');
+  which.className = 'hint';
+  which.textContent = '正在编辑：' + (result.plan_name || selectedPlanName() || guid);
+  box.appendChild(which);
 
   // The settings come back in one flat list.  Eleven numbers in a row
   // give no clue which ones belong together, so they are grouped by the

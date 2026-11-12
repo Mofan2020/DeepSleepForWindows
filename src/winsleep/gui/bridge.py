@@ -601,8 +601,25 @@ class Bridge:
         try:
             rows = powersettings.read_plan_settings(guid)
         except Exception as exc:  # noqa: BLE001
+            log.warning("the settings of plan %s could not be read: %s", guid, exc)
             return {"ok": False, "settings": [], "message": str(exc)}
-        return {"ok": True, "settings": rows}
+        # **把名字和条数一起回去。**
+        #
+        # 名字让界面能写「正在编辑：平衡」，用户一眼看出刷没刷新；条数
+        # 进日志——读成 0 条说明读的是错的那个计划，还是读不动，两者
+        # 修法完全不同，光看界面分不清。
+        name = ""
+        try:
+            from ..core import winpower
+
+            for plan_name, plan_guid in winpower.list_plans():
+                if str(plan_guid).lower() == str(guid).lower():
+                    name = plan_name
+                    break
+        except Exception:  # noqa: BLE001 - the name is decoration
+            name = ""
+        log.info("plan settings for %s (%s): %d rows", name or "?", guid, len(rows))
+        return {"ok": True, "settings": rows, "plan_name": name}
 
     def save_plan_settings(self, guid: str, changes: list[dict[str, Any]]) -> dict[str, Any]:
         """Change the settings of one power plan.

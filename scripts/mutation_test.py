@@ -630,10 +630,16 @@ MUTATIONS: list[tuple[str, Path, str, str]] = [
     (
         "the tray's cancel entry sets half an hour instead",
         SRC / "core" / "tray.py",
-        """                "取消，让它照常睡",
-                lambda _icon=None, _item=None: on_override(0),""",
-        """                "取消，让它照常睡",
-                lambda _icon=None, _item=None: on_override(30),""",
+        """entries.append(pystray.MenuItem("取消，让它照常睡", _callback(on_override, 0)))""",
+        """entries.append(pystray.MenuItem("取消，让它照常睡", _callback(on_override, 30)))""",
+    ),
+    (
+        "a menu action carries its argument in the signature again",
+        SRC / "core" / "tray.py",
+        """    def _act(_icon: Any = None, _item: Any = None) -> None:
+        handler(argument)""",
+        """    def _act(_icon=None, _item=None, extra=argument) -> None:
+        handler(argument)""",
     ),
     (
         "the selftest does not notice a missing interface file",

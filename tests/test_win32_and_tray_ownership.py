@@ -227,3 +227,86 @@ def test_no_tray_task_means_nothing_to_retire(monkeypatch) -> None:
     ok, detail = install.retire_tray_task()
     assert ok is True
     assert detail == "no tray task"
+
+
+# --------------------------------------------------------- 托盘菜单的动作签名
+
+class _StrictMenuItem:
+    """照 pystray 的规矩审查动作：参数超过两个就 raise ValueError(动作本身)。"""
+
+    def __init__(self, text, action=None, **kwargs) -> None:
+        self.text = text
+        self.action = action
+        if action is not None:
+            code = getattr(action, "__code__", None)
+            count = getattr(code, "co_argcount", 0)
+            if count > 2:
+                # pystray 抛的就是动作对象本身，所以日志里只有一串 lambda repr。
+                raise ValueError(action)
+
+
+class _StrictMenu:
+    SEPARATOR = object()
+
+    def __init__(self, *items) -> None:
+        self.items = [item for item in items if item is not _StrictMenu.SEPARATOR]
+
+
+def _fake_pystray(monkeypatch) -> None:
+    import sys
+    import types
+
+    module = types.ModuleType("pystray")
+    module.Menu = _StrictMenu
+    module.MenuItem = _StrictMenuItem
+    module.Menu.SEPARATOR = _StrictMenu.SEPARATOR
+    monkeypatch.setitem(sys.modules, "pystray", module)
+
+
+def test_every_menu_action_survives_pystray_signature_check(monkeypatch) -> None:
+    """菜单里每个动作都要能被 pystray 接受。
+
+    真实报错长这样（0.5.2 的真机日志）：
+
+        the notification area icon is not available:
+        <function build_menu.<locals>.<listcomp>.<lambda> at 0x...>
+
+    原因是 pystray 的 ``MenuItem._assert_action`` 数 ``co_argcount``，
+    而「把要传的参数写成默认值」的 lambda 数出来是三个参数——它不收，
+    抛出的还是函数对象本身，所以连一句能读懂的话都没有。
+    """
+    _fake_pystray(monkeypatch)
+
+    from winsleep.core import tray
+
+    menu = tray.build_menu(
+        on_show=lambda: None,
+        on_lock=lambda: None,
+        on_quit=lambda: None,
+        plan_choices=lambda: [("平衡", "guid-1")],
+        on_switch=lambda guid: None,
+        on_override=lambda minutes: None,
+    )
+
+    assert menu.items, "菜单是空的"
+
+
+def test_the_hold_entries_hand_over_the_right_number_of_minutes(monkeypatch) -> None:
+    """动作签名修好之后，点「2 小时」还得真的传 120。"""
+    _fake_pystray(monkeypatch)
+
+    from winsleep.core import tray
+
+    seen: list[int] = []
+    menu = tray.build_menu(
+        on_show=lambda: None,
+        on_lock=lambda: None,
+        on_quit=lambda: None,
+        on_override=lambda minutes: seen.append(minutes),
+    )
+
+    hold_group = [item for item in menu.items if isinstance(item.action, _StrictMenu)]
+    assert hold_group, "没有「保持唤醒」子菜单"
+    for item in hold_group[0].action.items:
+        item.action()
+    assert seen == [30, 60, 120, 480, 0], seen
