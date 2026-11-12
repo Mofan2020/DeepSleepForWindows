@@ -175,6 +175,40 @@ def on_signal(signum, _frame):
 #: The snippet has to appear exactly once in the file.
 MUTATIONS: list[tuple[str, Path, str, str]] = [
     (
+        "a service handle is passed without its signature (64-bit overflow)",
+        SRC / "core" / "telemetry.py",
+        """    advapi32.CloseServiceHandle.restype = wintypes.BOOL
+    advapi32.CloseServiceHandle.argtypes = [wintypes.HANDLE]""",
+        """    advapi32.CloseServiceHandle.restype = wintypes.BOOL""",
+    ),
+    (
+        "closing a service handle raises and wipes out the answer",
+        SRC / "core" / "telemetry.py",
+        """    try:
+        advapi32.CloseServiceHandle(handle)
+    except Exception:  # noqa: BLE001 - closing must stay silent
+        pass""",
+        """    advapi32.CloseServiceHandle(handle)""",
+    ),
+    (
+        "the tray icon is never put up at all",
+        SRC / "core" / "tray.py",
+        """    try:
+        icon.run_detached()""",
+        """    try:
+        pass  # mutation: the icon is never added""",
+    ),
+    (
+        "closing the window ends the program instead of hiding it",
+        SRC / "gui" / "app.py",
+        """        return False
+
+    return _hide_instead_of_closing""",
+        """        return True
+
+    return _hide_instead_of_closing""",
+    ),
+    (
         "the daemon trusts the plan it set last time instead of reading "
         "the real one",
         SRC / "core" / "daemon.py",

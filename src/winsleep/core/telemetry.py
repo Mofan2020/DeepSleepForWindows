@@ -430,7 +430,36 @@ def _service_state(name: str) -> dict[str, str]:
         return missing
 
     advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    # **每一个拿句柄当参数的调用都要声明 argtypes。**
+    #
+    # `OpenSCManagerW` 的 restype 是 HANDLE，返回的是普通 Python int
+    # （64 位句柄能到 1e18）。下面这些函数如果不声明 argtypes，ctypes
+    # 会按 C 的 `int` 处理第一个参数，直接抛
+    #
+    #     argument 1: OverflowError: int too long to convert
+    #
+    # 更糟的是它发生在 `finally` 的 `CloseServiceHandle` 里 ——
+    # finally 抛出的异常会盖掉前面的返回值，整个「读遥测状态」就变成
+    # 一个错误，界面上只剩这行报错。
     advapi32.OpenSCManagerW.restype = wintypes.HANDLE
+    advapi32.OpenSCManagerW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
+    advapi32.OpenServiceW.restype = wintypes.HANDLE
+    advapi32.OpenServiceW.argtypes = [wintypes.HANDLE, wintypes.LPCWSTR, wintypes.DWORD]
+    advapi32.QueryServiceStatus.restype = wintypes.BOOL
+    advapi32.QueryServiceStatus.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(_SERVICE_STATUS),
+    ]
+    advapi32.QueryServiceConfigW.restype = wintypes.BOOL
+    advapi32.QueryServiceConfigW.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    advapi32.CloseServiceHandle.restype = wintypes.BOOL
+    advapi32.CloseServiceHandle.argtypes = [wintypes.HANDLE]
+
     handle_manager = advapi32.OpenSCManagerW(None, None, _SC_MANAGER_CONNECT)
     if not handle_manager:
         return {"state": "unknown", "start": "unknown"}
@@ -476,12 +505,24 @@ def _service_state(name: str) -> dict[str, str]:
                 "start": _START_TYPE_NAMES.get(config.dwStartType, "unknown"),
             }
         finally:
-            advapi32.CloseServiceHandle(handle_service)
+            _close_service(advapi32, handle_service)
     except Exception as exc:  # noqa: BLE001 - a query must not crash the window
         log.debug("could not read the service %s: %s", name, exc)
         return {"state": "unknown", "start": "unknown"}
     finally:
-        advapi32.CloseServiceHandle(handle_manager)
+        # **关句柄这件事不能抛异常。** 它就在 finally 里，抛出来会把
+        # 上面所有正常的返回值盖掉——整个查询变成一个错误。
+        _close_service(advapi32, handle_manager)
+
+
+def _close_service(advapi32: object, handle: object) -> None:
+    """Close a service handle, and never raise while doing it."""
+    if not handle:
+        return
+    try:
+        advapi32.CloseServiceHandle(handle)
+    except Exception:  # noqa: BLE001 - closing must stay silent
+        pass
 
 
 def _task_is_disabled(name: str) -> bool | None:

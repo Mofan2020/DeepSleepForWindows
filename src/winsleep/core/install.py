@@ -178,53 +178,25 @@ def install_agent_task() -> tuple[bool, str]:
         delay_seconds=25,
     )
 
-def install_tray_task() -> tuple[bool, str]:
-    """Create the task that puts the icon in the notification area.
+def retire_tray_task() -> tuple[bool, str]:
+    """Take the separate tray process out of service.
 
-    It runs at logon in the user's session, because the icon needs a
-    desktop to live on.
+    The icon is created by the window's own process now, the way other
+    desktop tools do it: closing the window hides it instead of ending
+    the program, so the icon stays for as long as the program runs.
+
+    The scheduled task would only fight for the notification area - it
+    starts at logon and knows nothing about the window - so it is
+    removed on sight, along with any process it already started.
     """
-    from . import tasks
-
-    executable, arguments = program_command("tray")
-    return tasks.register_task(
-        TRAY_TASK,
-        executable,
-        arguments,
-        description="DeepSleep For Windows — 托盘图标",
-        delay_seconds=30,
-    )
-
-def start_tray() -> tuple[bool, str]:
-    """Start the notification area icon right now."""
     if not task_exists(TRAY_TASK):
-        return False, "the tray task is not installed yet"
-    result = _run(["schtasks", "/Run", "/TN", TRAY_TASK])
+        return True, "no tray task"
+    kill_processes("tray")
+    result = _run(["schtasks", "/Delete", "/TN", TRAY_TASK, "/F"])
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
-        return False, detail or "the tray did not start"
-    return True, "the tray was started"
-
-
-def ensure_tray_running() -> tuple[bool, str]:
-    """Make sure the icon in the notification area is there right now.
-
-    The tray is its own process, started by a scheduled task at logon.
-    That leaves exactly one hole: the task is registered during install
-    and then nothing starts it until the next logon - so for anyone who
-    does not log off, the icon never appears at all.  (``start_tray``
-    existed but nothing called it.)
-
-    Safe to call from the window on every start: it answers "already
-    running" without touching anything when the heartbeat is fresh.
-    """
-    if tray_running():
-        return True, "already running"
-    if not task_exists(TRAY_TASK):
-        ok, detail = install_tray_task()
-        if not ok:
-            return False, detail
-    return start_tray()
+        return False, detail or "the tray task could not be deleted"
+    return True, "the tray task was removed"
 
 
 def start_agent() -> tuple[bool, str]:
@@ -372,11 +344,11 @@ def install_all() -> tuple[bool, str]:
         return False, detail
 
     messages = ["后台服务已安装"]
-    tray_ok, tray_detail = install_tray_task()
-    if tray_ok:
-        messages.append("托盘图标已加入开机启动")
-    else:
-        messages.append(f"开机自启没有装上：{tray_detail}")
+    # 托盘图标现在由窗口进程自己带着，不再单独注册任务。老版本装过的
+    # 那个任务要清掉，否则登录时它会再挂一个图标出来，跟窗口那个打架。
+    retired_ok, retired_detail = retire_tray_task()
+    if not retired_ok:
+        messages.append(f"旧的托盘任务没能清掉：{retired_detail}")
 
     # A logon trigger waits for a logon that has already happened, so
     # the tasks are started here as well.  Otherwise the program is
@@ -556,7 +528,12 @@ def service_installed() -> bool:
 
 
 def tray_installed() -> bool:
-    """True when the task that starts the program at logon is there."""
+    """True when the old standalone tray task is still registered.
+
+    The icon is part of the window now, so this only answers "is there
+    a leftover task from an older version".  Nothing installs one any
+    more; the window removes it when it starts.
+    """
     return task_exists(TRAY_TASK)
 
 
@@ -571,7 +548,8 @@ def start_all() -> tuple[bool, str]:
     """
     started = []
     failed = []
-    for name in (DAEMON_TASK, AGENT_TASK, TRAY_TASK):
+    # 只有这两个是自己起的。托盘跟着窗口走，没有「起它」这回事。
+    for name in (DAEMON_TASK, AGENT_TASK):
         if not task_exists(name):
             failed.append(f"{name} is not registered")
             continue

@@ -349,6 +349,26 @@ def suspend(hibernate: bool = False) -> bool:
         advapi32 = ctypes.windll.advapi32
 
         # SeShutdownPrivilege
+        #
+        # **这两个调用必须声明 argtypes。** 句柄从 ctypes 里读出来是
+        # 普通 Python int（64 位能到 1e18），不声明就按 C 的 int 处理，
+        # 直接 OverflowError: argument 1...
+        advapi32.OpenProcessToken.restype = wintypes.BOOL
+        advapi32.OpenProcessToken.argtypes = [
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.HANDLE),
+        ]
+        advapi32.AdjustTokenPrivileges.restype = wintypes.BOOL
+        advapi32.AdjustTokenPrivileges.argtypes = [
+            wintypes.HANDLE,
+            wintypes.BOOL,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+        ]
+
         privilege = wintypes.LUID()
         token = wintypes.HANDLE()
         if not advapi32.OpenProcessToken(

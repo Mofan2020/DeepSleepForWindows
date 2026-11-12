@@ -229,72 +229,18 @@ def _cmd_hold(args: argparse.Namespace) -> int:
 
 
 def _cmd_tray(_args: argparse.Namespace) -> int:
-    """Stay in the notification area without showing a window."""
-    from .core import install, single, tray, winapi, winpower
+    """Stay in the notification area.
 
-    # **Only one tray, ever.**  The window asks for the icon on every
-    # start, and the task scheduler can also start one; two copies would
-    # mean two icons in the area, and the second one is the one the user
-    # clicks when he wants to close it.
-    lock = single.SingleInstance(single.lock_path().with_name("tray.lock"))
-    lock.acquire()
-    if not lock.is_first:
-        log.info("there is already a tray icon; this copy exits")
-        return 0
+    **The window owns the icon now** (the same shape other desktop
+    tools use): it keeps running after the window is closed, so the
+    icon is there for as long as the program is, and "open" brings the
+    window back instead of starting a second copy of everything.
 
-    # Say that the icon is there.  Without this there is no way to tell
-    # "the tray is running" from "the task is registered and silently
-    # doing nothing", and the user's question is the first one.
-    install.write_heartbeat(install.TRAY_HEARTBEAT)
-
-    def _show() -> None:
-        # The window is opened by a second copy of the program, so that
-        # only one window exists at a time.  It is started as its own
-        # process: this one is the tray and has to stay alive, so it
-        # cannot be the one that opens the window.
-        _open_gui_copy()
-
-    def _lock() -> None:
-        winapi.lock_workstation()
-
-    def _quit() -> None:
-        log.info("the program was left from the notification area")
-
-    def _beat() -> None:
-        install.write_heartbeat(install.TRAY_HEARTBEAT)
-
-    def _plans() -> list[tuple[str, str]]:
-        return winpower.list_plans()
-
-    def _switch(guid: str) -> None:
-        winpower.set_active_plan(guid)
-
-    def _override(minutes: int) -> None:
-        """Hold the machine awake for a while, or stop holding it.
-
-        The deadline goes into the config, which the daemon reads on
-        every tick - so the promise is kept even if this tray process is
-        closed a second later, and it ends by itself with nothing left
-        to clean up.
-        """
-        config = config_mod.load(paths.config_path())
-        config.keep_awake_until = (
-            0.0 if minutes <= 0 else time.time() + minutes * 60
-        )
-        config_mod.save(config, paths.config_path())
-        if minutes <= 0:
-            log.info("the timed override was cancelled from the tray")
-        else:
-            log.info("the machine is held awake for %d minutes (from the tray)", minutes)
-
-    try:
-        return tray.run_tray(
-            _show, _lock, _quit, _plans, _switch, heartbeat=_beat, on_override=_override
-        )
-    finally:
-        # The icon is gone now, so the answer to "is the tray there?"
-        # has to change at once rather than twenty seconds later.
-        install.clear_heartbeat(install.TRAY_HEARTBEAT)
+    This command therefore opens the window.  A second copy exits on
+    its own because only one window may be open, which is also what
+    keeps a second icon from appearing.
+    """
+    return _open_window()
 
 
 def _open_gui_copy() -> None:

@@ -354,7 +354,9 @@ def test_installing_starts_the_tasks_right_away(monkeypatch, tmp_path):
     called = []
     monkeypatch.setattr(install, "install_daemon_task", lambda: (True, "daemon"))
     monkeypatch.setattr(install, "install_agent_task", lambda: (True, "agent"))
-    monkeypatch.setattr(install, "install_tray_task", lambda: (True, "tray"))
+    # The icon is part of the window now; installing only removes the
+    # leftover task from older versions.
+    monkeypatch.setattr(install, "retire_tray_task", lambda: (True, "retired"))
     monkeypatch.setattr(
         install, "start_all", lambda: called.append(True) or (True, "started")
     )

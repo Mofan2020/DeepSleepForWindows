@@ -39,9 +39,12 @@ from typing import Any
 
 __all__ = [
     "TRAY_ICON_NAME",
+    "TrayIcon",
+    "build_menu",
     "icon_path",
     "make_icon",
     "run_tray",
+    "start_icon",
     "wait_for_notification_area",
     "watch_notification_area",
 ]
@@ -60,6 +63,22 @@ _AREA_WAIT_SECONDS = 60.0
 #: How often the area is checked, and the heartbeat written, once the
 #: icon is up.
 _WATCH_INTERVAL = 5.0
+
+
+def _has_pystray() -> bool:
+    """Whether the tray library is installed at all.
+
+    A module that is already imported counts, which is also how the
+    tests put a stand-in in place.
+    """
+    import importlib.util
+
+    if "pystray" in sys.modules:
+        return sys.modules["pystray"] is not None
+    try:
+        return importlib.util.find_spec("pystray") is not None
+    except (ImportError, ValueError):
+        return False
 
 
 def icon_path() -> Path | None:
@@ -206,61 +225,24 @@ def watch_notification_area(
         stop.wait(interval)
 
 
-def run_tray(
+def build_menu(
+    *,
     on_show: Callable[[], None],
     on_lock: Callable[[], None],
     on_quit: Callable[[], None],
     plan_choices: Callable[[], list[tuple[str, str]]] | None = None,
     on_switch: Callable[[str], None] | None = None,
-    heartbeat: Callable[[], None] | None = None,
     on_override: Callable[[int], None] | None = None,
-) -> int:
-    """Show the icon and stay in the notification area until it is left.
+) -> Any:
+    """The right-click menu, built once and shared by both entry points.
 
-    *on_show* opens the window, *on_lock* locks the screen and
-    *on_quit* ends the program.  *plan_choices* gives the power plans
-    that are put into the menu, and *on_switch* switches to the one
-    that was picked.  *heartbeat* is called while the icon is up, so
-    the rest of the program can tell the tray is alive.
-
-    *on_override* is called with a number of minutes to hold the
-    machine awake, or zero to let it go.  A sleep tool that cannot be
-    told "not now" without opening a window is a sleep tool people stop
-    using, so this is in the right-click menu rather than only in the
-    window.
+    ``on_quit`` is whatever "退出" should do; stopping the icon is the
+    caller's job, because only the caller holds the icon.
     """
-    if sys.platform != "win32":
-        log.info("the notification area is only available on Windows")
-        return 1
+    import pystray
 
-    try:
-        import pystray
-    except ImportError:
-        log.warning("pystray is not installed; the program cannot stay in the notification area")
-        return 1
-
-    from . import winapi
-
-    icon = make_icon()
-    if icon is None:
-        log.warning("the icon for the notification area could not be made")
-        return 1
-
-    # Windows 11 hides tray icons by default in the overflow area; a
-    # tooltip helps users find it.
-    icon.title = "DeepSleep For Windows"
-
-    def _quit(icon_obj: Any = None, item: Any = None) -> None:
-        try:
-            on_quit()
-        finally:
-            # The icon has to stop either way, or the program keeps
-            # running with no way to get out of it.
-            stop.set()
-            if icon_obj is not None:
-                icon_obj.stop()
-            else:
-                icon.stop()
+    def _quit(_icon: Any = None, _item: Any = None) -> None:
+        on_quit()
 
     items: list[Any] = [
         pystray.MenuItem("打开主界面", lambda: on_show(), default=True),
@@ -290,6 +272,9 @@ def run_tray(
         items.append(pystray.Menu.SEPARATOR)
 
     if plan_choices is not None and on_switch is not None:
+        # Taken into a local so the closure below does not have to be
+        # narrowed again (and cannot change under it).
+        switch = on_switch
         try:
             plans = plan_choices()
         except Exception:  # noqa: BLE001 - the menu is still useful
@@ -300,16 +285,77 @@ def run_tray(
                 entries.append(
                     pystray.MenuItem(
                         name,
-                        lambda _icon=None, _item=None, target=guid: on_switch(target),
+                        lambda _icon=None, _item=None, target=guid: switch(target),
                     )
                 )
             items.append(pystray.MenuItem("切换电源计划", pystray.Menu(*entries)))
             items.append(pystray.Menu.SEPARATOR)
 
     items.append(pystray.MenuItem("退出", _quit))
-    icon.menu = pystray.Menu(*items)
+    return pystray.Menu(*items)
+
+
+def run_tray(
+    on_show: Callable[[], None],
+    on_lock: Callable[[], None],
+    on_quit: Callable[[], None],
+    plan_choices: Callable[[], list[tuple[str, str]]] | None = None,
+    on_switch: Callable[[str], None] | None = None,
+    heartbeat: Callable[[], None] | None = None,
+    on_override: Callable[[int], None] | None = None,
+) -> int:
+    """Show the icon and stay in the notification area until it is left.
+
+    *on_show* opens the window, *on_lock* locks the screen and
+    *on_quit* ends the program.  *plan_choices* gives the power plans
+    that are put into the menu, and *on_switch* switches to the one
+    that was picked.  *heartbeat* is called while the icon is up, so
+    the rest of the program can tell the tray is alive.
+
+    *on_override* is called with a number of minutes to hold the
+    machine awake, or zero to let it go.  A sleep tool that cannot be
+    told "not now" without opening a window is a sleep tool people stop
+    using, so this is in the right-click menu rather than only in the
+    window.
+    """
+    if sys.platform != "win32":
+        log.info("the notification area is only available on Windows")
+        return 1
+
+    if not _has_pystray():
+        log.warning("pystray is not installed; the program cannot stay in the notification area")
+        return 1
+
+    from . import winapi
+
+    icon = make_icon()
+    if icon is None:
+        log.warning("the icon for the notification area could not be made")
+        return 1
+
+    # Windows 11 hides tray icons by default in the overflow area; a
+    # tooltip helps users find it.
+    icon.title = "DeepSleep For Windows"
 
     stop = threading.Event()
+
+    def _quit() -> None:
+        try:
+            on_quit()
+        finally:
+            # The icon has to stop either way, or the program keeps
+            # running with no way to get out of it.
+            stop.set()
+            icon.stop()
+
+    icon.menu = build_menu(
+        on_show=on_show,
+        on_lock=on_lock,
+        on_quit=_quit,
+        plan_choices=plan_choices,
+        on_switch=on_switch,
+        on_override=on_override,
+    )
 
     # The area has to be there before the icon is added, or the add is
     # silently dropped (see the module docstring).
@@ -336,3 +382,104 @@ def run_tray(
             pass
 
     return 0
+
+
+class TrayIcon:
+    """An icon that is already up, owned by whoever created it.
+
+    ``stop()`` takes it away again.  This is what the window uses: the
+    icon lives in the window's own process, so it is there for exactly
+    as long as the window is, and closing the window does not take it
+    with it.
+    """
+
+    def __init__(self, icon: Any, stop: threading.Event) -> None:
+        self._icon = icon
+        self._stop = stop
+
+    def stop(self) -> None:
+        self._stop.set()
+        try:
+            self._icon.stop()
+        except Exception:  # noqa: BLE001 - it may already be gone
+            pass
+
+
+def start_icon(
+    *,
+    on_show: Callable[[], None],
+    on_lock: Callable[[], None],
+    on_quit: Callable[[], None],
+    plan_choices: Callable[[], list[tuple[str, str]]] | None = None,
+    on_switch: Callable[[str], None] | None = None,
+    heartbeat: Callable[[], None] | None = None,
+    on_override: Callable[[int], None] | None = None,
+) -> TrayIcon | None:
+    """Put the icon up and return at once, or None when it cannot exist.
+
+    **不阻塞调用方。** ``run_tray`` 会一直待在循环里，只有一个托盘进程
+    的时候那样写没问题；现在图标跟着窗口进程走，窗口还有自己的消息
+    循环要跑，所以这里起完就走。
+
+    Explorer 重启之后图标会被清掉，所以看门狗线程一起在这里起——
+    窗口进程活着，它就一直守着。
+    """
+    if sys.platform != "win32":
+        return None
+    if not _has_pystray():
+        log.warning("pystray is not installed; the icon cannot be shown")
+        return None
+
+    from . import winapi
+
+    icon = make_icon()
+    if icon is None:
+        log.warning("the icon for the notification area could not be made")
+        return None
+
+    icon.title = "DeepSleep For Windows"
+    stop = threading.Event()
+
+    def _quit() -> None:
+        try:
+            on_quit()
+        finally:
+            stop.set()
+            try:
+                icon.stop()
+            except Exception:  # noqa: BLE001 - already going away
+                pass
+
+    icon.menu = build_menu(
+        on_show=on_show,
+        on_lock=on_lock,
+        on_quit=_quit,
+        plan_choices=plan_choices,
+        on_switch=on_switch,
+        on_override=on_override,
+    )
+
+    # The area has to exist before the icon is added, or the add is
+    # dropped without a word (pystray throws the result away).
+    wait_for_notification_area(winapi.notification_area_ready)
+
+    try:
+        icon.run_detached()
+    except Exception as exc:  # noqa: BLE001 - the window still works
+        log.warning("the icon could not be added: %s", exc)
+        return None
+    log.info("the icon is in the notification area")
+
+    watcher = threading.Thread(
+        target=watch_notification_area,
+        kwargs={
+            "icon": icon,
+            "ready": winapi.notification_area_ready,
+            "stop": stop,
+            "beat": heartbeat,
+        },
+        name="winsleep-tray",
+        daemon=True,
+    )
+    watcher.start()
+    return TrayIcon(icon, stop)

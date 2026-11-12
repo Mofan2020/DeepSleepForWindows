@@ -93,8 +93,14 @@ def _run_elevated_command(command: str, timeout_seconds: int = 120) -> dict[str,
     info.lpParameters = params
     info.nShow = SW_HIDE
 
+    # A pointer argument, so it has to say so - an undeclared first
+    # parameter is treated as a C int.
+    shell32 = ctypes.windll.shell32
+    shell32.ShellExecuteExW.restype = ctypes.c_int
+    shell32.ShellExecuteExW.argtypes = [ctypes.c_void_p]
+
     try:
-        ok = ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(info))
+        ok = shell32.ShellExecuteExW(ctypes.byref(info))
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "message": f"无法启动提权进程：{exc}"}
 

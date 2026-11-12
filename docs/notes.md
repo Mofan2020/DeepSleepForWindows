@@ -720,4 +720,43 @@ daemon 每 tick 重读配置，所以窗口只写配置，不需要走 IPC。
 
 **教训**：写了「启动某件事」的函数，一定要有调用点。`start_tray` 这种名字让人
 以为它在某处被调用了，实际上 grep 一下才发现是死代码。
+## 0.5.2：遥测的溢出，和托盘真正的归属
 
+### 遥测状态一直报 OverflowError
+
+`telemetry._service_state()` 用 `OpenSCManagerW` 拿一个 SC_HANDLE 回来，
+接着 `OpenServiceW` / `QueryServiceStatus` / `QueryServiceConfigW` /
+`CloseServiceHandle` 全都没声明 `argtypes`。句柄从 ctypes 读出来是普通
+Python int，不声明就按 C 的 int 处理，于是 `argument 1: OverflowError:
+int too long to convert`。
+
+最阴的一处是 `CloseServiceHandle` 在 `finally` 里。finally 抛出的异常会
+盖掉前面所有正常返回值，所以整个「读遥测状态」变成一个错误，界面上就只
+剩那行报错，看起来像查询本身坏了。
+
+补了签名，并把关句柄包成 `_close_service()`：关句柄这件事永远不许抛。
+
+### 这一类 bug 不再靠人记
+
+同一个形状已经出现两次（提权那条、这条）。新增
+`tests/test_win32_and_tray_ownership.py`：逐个模块检查所有拿句柄当参数的
+Win32 调用有没有声明 `argtypes`。这条测试当场又揪出三处漏的
+（`OpenProcessToken`、`AdjustTokenPrivileges`、`ShellExecuteExW`）。
+
+### 托盘：从「另一个进程」改成「窗口自己的图标」
+
+以前托盘是独立的计划任务进程，只在登录那一刻启动：
+
+- 装完之后不注销重登，图标永远不出现；
+- 就算起来了，它跟窗口是两个进程，「打开主界面」只能再拉一个；
+- 登录时它自己起来，跟窗口抢通知区域。
+
+现在跟窗口同一个进程（跟 SDM 一样的做法）：
+
+- `tray.start_icon()` 起完就返回，不阻塞窗口的消息循环；
+- 关窗口返回 `False` 取消关闭，把窗口 `hide()` 起来，图标留着；
+- 托盘「打开主界面」把窗口 `show()` 回来，不再开新进程；
+- 退出走托盘菜单，`webview.start()` 返回后把图标摘掉；
+- 启动时 `retire_tray_task()` 把老版本留下的任务删掉、把残留进程杀干净。
+
+`tray_installed()` 现在只回答「有没有老的遗留任务」，不再代表图标在不在。
