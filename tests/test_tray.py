@@ -267,8 +267,22 @@ def test_stops_when_the_event_is_set_before_start() -> None:
 
 
 def test_notification_area_is_not_ready_off_windows() -> None:
-    """This is the honest answer on macOS: there is no such thing."""
+    """On macOS and Linux there is no such thing, and saying so is correct.
+
+    The assertion only holds where Windows is absent - a Windows CI
+    runner does have a taskbar.  Bracketing the two platforms catches
+    both "always True" and "always False".
+    """
+    if winapi.is_supported():
+        pytest.skip("this machine has a notification area")
     assert winapi.notification_area_ready() is False
+
+
+def test_notification_area_is_ready_on_windows() -> None:
+    """A normal Windows desktop does have one - the function must find it."""
+    if not winapi.is_supported():
+        pytest.skip("not Windows")
+    assert winapi.notification_area_ready() is True
 
 
 def test_notification_area_is_exported() -> None:
