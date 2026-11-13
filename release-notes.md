@@ -1,4 +1,4 @@
-## DeepSleep For Windows v0.5.4 - Beta
+## DeepSleep For Windows v0.5.5 - Beta
 
 ### 本次更新中修复了下列问题：
 

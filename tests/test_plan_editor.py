@@ -15,12 +15,12 @@ from __future__ import annotations
 
 import pytest
 
-from src.winsleep.core import powersettings
+from winsleep.core import powersettings
 
 
 def _bridge(monkeypatch: pytest.MonkeyPatch):
     """一个不用真的去读注册表的桥。"""
-    from src.winsleep.gui import bridge as bridge_mod
+    from winsleep.gui import bridge as bridge_mod
 
     created = {}
 
@@ -56,7 +56,7 @@ def test_the_name_is_looked_up_by_guid_and_not_borrowed_from_elsewhere(
     """
     monkeypatch.setattr(powersettings, "read_plan_settings",
                         lambda guid: [{"guid": "g", "group": "sleep", "name": "睡眠", "value": 1}])
-    from src.winsleep.core import winpower
+    from winsleep.core import winpower
 
     monkeypatch.setattr(winpower, "list_plans", lambda: [
         ("平衡", "381b4222-f694-41f0-9685-ff5bb260df2e"),
