@@ -560,6 +560,43 @@ function selectedPlanName() {
   return option ? String(option.textContent || '') : '';
 }
 
+/**
+ * 某个计划 GUID 的名字，从下拉框里按 guid 查。
+ *
+ * **按 guid 查，不按「当前选中的那个」查。** 后者在「下拉框和面板不在同一
+ * 拍」的时候会拿错名字——用户看到的就是「换了个计划，上面还写着上一个」。
+ */
+function planNameOfGuid(guid) {
+  const select = $('editPlanSelect');
+  if (!select || !select.options || !guid) return '';
+  const options = Array.from(select.options || []);
+  const hit = options.find((option) => option.value === guid);
+  return hit ? String(hit.textContent || '') : '';
+}
+
+/** 面板上现在画的是哪个计划：刷新之后用它判断要不要重画。 */
+let lastDrawnPlanGuid = '';
+
+/**
+ * 用户在下拉框里换了一个计划。
+ *
+ * **顺序是死的：先画面板，再记选择。**
+ *
+ * 以前是 `await save_config(...)` 之后再 `renderPlanSettings(...)`：存设置
+ * 那一步只要失败一次（写盘失败、后台没起、参数被拒），后面那句就永远不
+ * 执行——面板停在原地，用户看到的就是「换哪个计划都写着同一个名字、数值
+ * 也不动」。记不住选择是小事，画面不动才是那次报的问题。
+ */
+async function selectPlanToEdit(guid) {
+  await renderPlanSettings(guid);
+  try {
+    await api().save_config({ last_plan_guid: guid });
+  } catch (err) {
+    // 记不住下次打开时回到哪个计划，仅此而已。
+    console.warn('the plan being edited could not be remembered', err);
+  }
+}
+
 async function renderPlanSettings(guid) {
   const box = $('planSettings');
   const bar = $('planSaveBar');
@@ -602,10 +639,25 @@ async function renderPlanSettings(guid) {
   }
   // 告诉用户「下面是哪个计划的内容」。换计划时这一行会跟着变，
   // 一眼就能看出到底刷没刷新。
+  // **这一行是「到底刷没刷」的唯一凭据。**
+  //
+  // 以前只写名字，而后端读不到名字、下拉框又刚好停在上一个计划上时，
+  // 名字会一直写成同一个——看起来就是「换计划没反应」。现在名字按 guid
+  // 查，后面再跟上条数和 guid 尾段：条数变了说明读到了另一个计划，
+  // 名字和 guid 对不上则说明问题在名字那一层。
   const which = document.createElement('p');
   which.className = 'hint';
-  which.textContent = '正在编辑：' + (result.plan_name || selectedPlanName() || guid);
+  const shownName = planNameOfGuid(guid) || result.plan_name || guid;
+  const tail = String(guid).replace(/[{}]/g, '').slice(-6);
+  which.textContent = `正在编辑：${shownName} · ${rows.length} 项 · ${tail}`;
+  if (result.plan_name && shownName !== result.plan_name) {
+    // 下拉框和后端对同一个 guid 给出了不同的名字：这是程序的问题，
+    // 写出来比藏起来有用。
+    which.textContent += `（后端说是「${result.plan_name}」）`;
+  }
+  which.dataset.planGuid = String(guid);
   box.appendChild(which);
+  lastDrawnPlanGuid = String(guid);
 
   // The settings come back in one flat list.  Eleven numbers in a row
   // give no clue which ones belong together, so they are grouped by the
@@ -1166,6 +1218,10 @@ async function refresh() {
     || data.active_plan_guid
     || '';
   fillPlanSelectByGuid(editSelect, plans, data.plan_guids || [], wantedGuid);
+  // 下拉框里的计划换了（换了配置、计划被删、被复制），面板不能还写着旧的。
+  if (editSelect.value && editSelect.value !== lastDrawnPlanGuid) {
+    renderPlanSettings(editSelect.value);
+  }
 
   let service = null;
   try {
@@ -1473,10 +1529,8 @@ function wire() {
     await reloadLog();
   });
 
-  $('editPlanSelect').addEventListener('change', async (event) => {
-    const guid = event.target.value;
-    await api().save_config({ last_plan_guid: guid });
-    await renderPlanSettings(guid);
+  $('editPlanSelect').addEventListener('change', (event) => {
+    selectPlanToEdit(event.target.value);
   });
 
   $('duplicatePlanBtn').addEventListener('click', async () => {

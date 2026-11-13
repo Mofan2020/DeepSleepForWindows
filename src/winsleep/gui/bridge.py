@@ -612,8 +612,12 @@ class Bridge:
         try:
             from ..core import winpower
 
+            # 大小写和花括号都不能左右这次比对：界面上传的是注册表里那份裸
+            # GUID，别处可能带 {}。比不上的时候名字是空的，而界面会退回
+            # 「下拉框里那个计划的名字」——那就成了「换计划名字不变」。
+            wanted = str(guid).strip().strip("{}").lower()
             for plan_name, plan_guid in winpower.list_plans():
-                if str(plan_guid).lower() == str(guid).lower():
+                if str(plan_guid).strip().strip("{}").lower() == wanted:
                     name = plan_name
                     break
         except Exception:  # noqa: BLE001 - the name is decoration

@@ -543,6 +543,209 @@ test('the editor dropdown is not rebuilt while the list is unchanged', () => {
 
 /* ------------------------------------------------------------- report */
 
+
+/* ---------------------------------------------- the plan editor (v0.5.4) */
+
+/* 这一组测的是「换一个计划，面板跟着换」。
+ *
+ * 用户报过三次同一个毛病：下拉框里明明换成了「高性能」，上面那行还写着
+ * 「正在编辑：平衡」，下面的数值也不动。根因有两条，都在这里钉住：
+ *
+ * 1. 换计划时先 `await save_config(...)` 再渲染——存设置一旦失败，后面
+ *    那句永远不执行，面板就停在原地。
+ * 2. 标题里的名字是后端给的（读不到就是空），空的时候退回「下拉框当前
+ *    选中项」。一旦下拉框和面板不同步，名字就写到别的计划头上。
+ */
+
+const planChangesDecl = constant(/let planChanges = \{\};/, 'planChanges');
+const lastDrawnDecl = constant(/let lastDrawnPlanGuid = '';/, 'lastDrawnPlanGuid');
+
+const planCode = [
+  groupLabels,
+  stateDecl,
+  planChangesDecl,
+  lastDrawnDecl,
+  extract('makeOption'),
+  extract('planNameOfGuid'),
+  extract('selectedPlanName'),
+  extract('renderPlanSettings'),
+  extract('selectPlanToEdit'),
+].join('\n');
+
+/* 一个够用的元素：记得住孩子、属性和文字。 */
+function richElement(tag = 'div') {
+  const node = {
+    tagName: tag,
+    className: '',
+    textContent: '',
+    hidden: false,
+    value: '',
+    dataset: {},
+    children: [],
+    style: {},
+    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    appendChild(child) {
+      node.children.push(child);
+      return child;
+    },
+    append(...kids) {
+      kids.forEach((kid) => node.children.push(kid));
+    },
+    addEventListener() {},
+    removeAttribute() {},
+    setAttribute() {},
+    querySelector: () => null,
+  };
+  // **innerHTML 赋值要清孩子。** 真 DOM 里 `box.innerHTML = ''` 就是把子节点
+  // 全删掉；假 DOM 只存一个字符串的话，重画之后 children 里还堆着上一次的
+  // 节点，断言读到的永远是第一次画的那行——测试会「通过」，读到的是旧东西。
+  let html = '';
+  Object.defineProperty(node, 'innerHTML', {
+    get: () => html,
+    set: (value) => {
+      html = value;
+      if (!value) node.children.length = 0;
+    },
+  });
+  Object.defineProperty(node, 'options', {
+    get() { return node.children; },
+    set() {},
+  });
+  return node;
+}
+
+/* 下拉框：带 options 和 selectedIndex，跟真的 select 一样「设 value 就
+ * 挪选中项」。假 DOM 不模拟这个的话，planNameOfGuid 永远查不到东西。 */
+function planSelect(entries) {
+  const select = richElement('select');
+  entries.forEach(([value, name]) => {
+    const option = richElement('option');
+    option.value = value;
+    option.textContent = name;
+    select.children.push(option);
+  });
+  let current = entries.length ? entries[0][0] : '';
+  Object.defineProperty(select, 'value', {
+    get: () => current,
+    set: (next) => {
+      if (select.children.some((option) => option.value === next)) current = next;
+    },
+  });
+  Object.defineProperty(select, 'selectedIndex', {
+    get: () => select.children.findIndex((option) => option.value === current),
+  });
+  return select;
+}
+
+const PLAN_ROWS = (sleep) => ([
+  { name: '关闭显示器', guid: 'g-display', group: 'video', value: sleep, unit: '分钟',
+    choices: [] },
+  { name: '睡眠', guid: 'g-sleep', group: 'sleep', value: sleep + 1, unit: '分钟',
+    choices: [] },
+]);
+
+/* 把真正的 renderPlanSettings / selectPlanToEdit 跑起来。 */
+function planScope(options) {
+  const opts = options || {};
+  const fields = {};
+  const get = (id) => {
+    if (!fields[id]) fields[id] = richElement('div');
+    return fields[id];
+  };
+  fields.editPlanSelect = planSelect([
+    ['g-balanced', '平衡'],
+    ['g-high', '高性能'],
+    ['g-saver', '节能'],
+  ]);
+  const settings = {
+    'g-balanced': { ok: true, plan_name: opts.balancedName ?? '平衡', settings: PLAN_ROWS(10) },
+    'g-high': { ok: true, plan_name: opts.highName ?? '高性能', settings: PLAN_ROWS(20) },
+    'g-saver': { ok: true, plan_name: '', settings: PLAN_ROWS(30) },
+  };
+  const calls = { saved: [] };
+  const scope = vm.createContext({
+    $: get,
+    api: () => ({
+      plan_settings: (guid) => Promise.resolve(settings[guid] || { ok: false, settings: [] }),
+      save_config: (payload) => {
+        calls.saved.push(payload);
+        if (opts.saveFails) return Promise.reject(new Error('写盘失败'));
+        return Promise.resolve({ ok: true });
+      },
+    }),
+    document: { createElement: (tag) => richElement(tag), activeElement: null },
+    console,
+    Array,
+    Object,
+    String,
+    Number,
+    Math,
+  });
+  vm.runInContext(
+    `${planCode}\nthis.__render = renderPlanSettings; this.__select = selectPlanToEdit;`,
+    scope,
+  );
+  return { scope, fields, get, calls };
+}
+
+/** 面板顶上那行「正在编辑：…」。 */
+function headingOf(fields) {
+  const box = fields.planSettings;
+  const found = (box.children || []).find(
+    (child) => child.dataset && child.dataset.planGuid,
+  );
+  return found ? String(found.textContent || '') : '';
+}
+
+test('换一个计划，标题就写那个计划', async () => {
+  const { scope, fields } = planScope();
+  await vm.runInContext('this.__render("g-high")', scope);
+  assert.match(headingOf(fields), /高性能/);
+  assert.doesNotMatch(headingOf(fields), /平衡/);
+});
+
+test('标题里的名字按 guid 查，不看下拉框此刻停在哪', async () => {
+  // 下拉框停在「平衡」，面板画的却是「高性能」——名字不能跟着下拉框走。
+  const { scope, fields, get } = planScope();
+  get('editPlanSelect').value = 'g-balanced';
+  await vm.runInContext('this.__render("g-high")', scope);
+  assert.match(headingOf(fields), /高性能/);
+});
+
+test('后端没给名字的时候用下拉框里那个', async () => {
+  const { scope, fields } = planScope({ highName: '' });
+  await vm.runInContext('this.__render("g-high")', scope);
+  assert.match(headingOf(fields), /高性能/);
+});
+
+test('标题带上条数和 guid 尾段，刷没刷一眼能分清', async () => {
+  const { scope, fields } = planScope();
+  await vm.runInContext('this.__render("g-high")', scope);
+  const heading = headingOf(fields);
+  assert.match(heading, /2 项/);
+  assert.match(heading, /g-high/);
+  await vm.runInContext('this.__render("g-saver")', scope);
+  // 尾段取的是 guid 最后 6 位：g-saver 是 7 个字符，所以只剩下 -saver。
+  assert.match(headingOf(fields), /saver/);
+});
+
+test('存不住「上次编辑的计划」也要把面板画出来', async () => {
+  // 这是用户报的那个毛病：先存后画，存失败就把画也吞了。
+  const { scope, fields, calls } = planScope({ saveFails: true });
+  await vm.runInContext('this.__select("g-high")', scope);
+  assert.match(headingOf(fields), /高性能/);
+  // 数组是在 vm 那个 realm 里造的，原型跟这里不是同一个，比结构不比身份。
+  assert.strictEqual(JSON.stringify(calls.saved), JSON.stringify([{ last_plan_guid: 'g-high' }]));
+});
+
+test('换计划时两份内容确实不一样', async () => {
+  const { scope, fields } = planScope();
+  await vm.runInContext('this.__render("g-high")', scope);
+  const high = headingOf(fields);
+  await vm.runInContext('this.__render("g-saver")', scope);
+  assert.notStrictEqual(headingOf(fields), high);
+});
+
 await run();
 
 console.log('');
