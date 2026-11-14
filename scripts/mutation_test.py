@@ -175,6 +175,38 @@ def on_signal(signum, _frame):
 #: The snippet has to appear exactly once in the file.
 MUTATIONS: list[tuple[str, Path, str, str]] = [
     (
+        "the plan is switched without waiting for the condition to hold",
+        SRC / "core" / "stability.py",
+        """        if now - self._pending_since >= self._hold:
+            self._current = wanted
+            self._pending = None
+        return self._current""",
+        """        self._current = wanted
+        self._pending = None
+        return self._current""",
+    ),
+    (
+        "the cpu reading is used raw instead of averaged",
+        SRC / "core" / "stability.py",
+        """        self._samples.append(max(0.0, sample))
+        if len(self._samples) > self._window:
+            self._samples.pop(0)
+        return self.value()""",
+        """        return max(0.0, sample)""",
+    ),
+    (
+        "redrawing the plan panel throws away the unsaved changes",
+        SRC / "gui" / "assets" / "app.js",
+        """  if (guid && guid === lastDrawnPlanGuid && Object.keys(planChanges).length > 0) {
+    bar.hidden = false;
+    return;
+  }""",
+        """  if (false) {
+    bar.hidden = false;
+    return;
+  }""",
+    ),
+    (
         "a service handle is passed without its signature (64-bit overflow)",
         SRC / "core" / "telemetry.py",
         """    advapi32.CloseServiceHandle.restype = wintypes.BOOL

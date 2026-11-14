@@ -72,6 +72,7 @@ const code = [
   extract('renderGuardCards'),
   extract('fillPlanSelect'),
   extract('fillPlanSelectByGuid'),
+  extract('planToEdit'),
   extract('renderRules'),
   extract('renderGames'),
   extract('renderService'),
@@ -570,6 +571,8 @@ const planCode = [
   extract('selectedPlanName'),
   extract('renderPlanSettings'),
   extract('selectPlanToEdit'),
+  extract('rememberEditedPlan'),
+  extract('planToEdit'),
 ].join('\n');
 
 /* 一个够用的元素：记得住孩子、属性和文字。 */
@@ -682,7 +685,7 @@ function planScope(options) {
     Math,
   });
   vm.runInContext(
-    `${planCode}\nthis.__render = renderPlanSettings; this.__select = selectPlanToEdit;`,
+    `${planCode}\nthis.__render = renderPlanSettings; this.__select = selectPlanToEdit; this.__planToEdit = planToEdit;`,
     scope,
   );
   return { scope, fields, get, calls };
@@ -736,6 +739,46 @@ test('存不住「上次编辑的计划」也要把面板画出来', async () =>
   assert.match(headingOf(fields), /高性能/);
   // 数组是在 vm 那个 realm 里造的，原型跟这里不是同一个，比结构不比身份。
   assert.strictEqual(JSON.stringify(calls.saved), JSON.stringify([{ last_plan_guid: 'g-high' }]));
+});
+
+test('有未保存的改动时，重画同一个计划不会把改动冲掉', async () => {
+  // 用户报过「设置好过一会跳回原设置，完全无法保存」。根因之一就是重画
+  // 面板时把没保存的改动清掉了，而编辑器每五秒跟着「当前生效的计划」重画
+  // 一次。这条钉住：同一个计划有未保存改动时不许重画。
+  const { scope } = planScope();
+  await vm.runInContext('this.__render("g-high")', scope);
+  vm.runInContext(
+    'planChanges["x"] = { group: "g", guid: "x", value: 7, plan: "g-high" };',
+    scope,
+  );
+  await vm.runInContext('this.__render("g-high")', scope);
+  const left = vm.runInContext('JSON.stringify(Object.keys(planChanges))', scope);
+  assert.strictEqual(left, '["x"]');
+});
+
+test('换计划只清掉那个计划上的改动', async () => {
+  const { scope } = planScope();
+  await vm.runInContext('this.__render("g-high")', scope);
+  vm.runInContext(
+    'planChanges["x"] = { group: "g", guid: "x", value: 7, plan: "g-high" };'
+    + ' planChanges["y"] = { group: "g", guid: "y", value: 8, plan: "g-saver" };',
+    scope,
+  );
+  await vm.runInContext('this.__render("g-saver")', scope);
+  const left = vm.runInContext('JSON.stringify(Object.keys(planChanges))', scope);
+  // 重画 g-saver 清掉 g-saver 自己的改动，g-high 的改动留着——用户切回去
+  // 时还在。没保存的改动不该因为换了计划就没了。
+  assert.strictEqual(left, '["x"]');
+});
+
+test('编辑器不跟着当前生效的计划跑', () => {
+  const { scope } = planScope();
+  // 没选过、也没记住 → 空，让用户自己选；不拿「现在生效的那个」顶上。
+  assert.strictEqual(vm.runInContext('this.__planToEdit("", "")', scope), '');
+  // 用户选过的最优先。
+  assert.strictEqual(vm.runInContext('this.__planToEdit("g-a", "g-b")', scope), 'g-a');
+  // 其次是记住的上次那个。
+  assert.strictEqual(vm.runInContext('this.__planToEdit("", "g-b")', scope), 'g-b');
 });
 
 test('换计划时两份内容确实不一样', async () => {

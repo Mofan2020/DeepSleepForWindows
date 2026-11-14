@@ -28,7 +28,7 @@ from collections.abc import Callable
 from typing import Any
 
 from . import config as config_mod
-from . import paths, winapi, winpower
+from . import paths, stability, winapi, winpower
 from .decide import Intent, decide
 from .rules import Rule, Snapshot, evaluate
 from .servermode import Phase
@@ -325,6 +325,10 @@ class Daemon:
         self._conflict_warning: str = ""
         #: When the log file was last trimmed.
         self._last_log_trim: float = 0.0
+        #: CPU 读数先平均再用。阈值是单点比较，不平均就会在边界上抖。
+        self._cpu_average = stability.CpuAverage()
+        #: 计划要稳定一段时间才真的切。抖动的读数凑不满这个时间。
+        self._plan_stabilizer = stability.PlanStabilizer()
 
     # -- lifecycle -------------------------------------------------------
 
@@ -551,6 +555,20 @@ class Daemon:
             override_until=config.keep_awake_until,
         )
 
+        # **计划先稳住再切。**
+        #
+        # 决定是「CPU 低于阈值」这种单点比较，机器上常年有后台任务在跑，
+        # 读数就在阈值边上晃。实测后台服务因此每五秒切一次电源计划，界面
+        # 上「正在编辑的计划」也跟着换，用户没保存的改动被冲掉。这里让
+        # 新条件连续稳定够久才真的换。
+        stabilized = self._plan_stabilizer.update(time.time(), intent.plan)
+        if stabilized != intent.plan:
+            intent = dataclasses.replace(
+                intent,
+                plan=stabilized,
+                reason=f"{intent.reason}（新条件还没稳定够久，先不动）",
+            )
+
         return self._apply_rules(config, snap, intent)
 
     def _watched_processes(self, config: config_mod.Config) -> set[str]:
@@ -665,9 +683,10 @@ class Daemon:
         except ImportError:
             return 0.0
         try:
-            return float(psutil.cpu_percent(interval=None))
+            raw = float(psutil.cpu_percent(interval=None))
         except Exception:  # noqa: BLE001
-            return 0.0
+            raw = 0.0
+        return self._cpu_average.add(raw)
 
     # -- acting -----------------------------------------------------------
 

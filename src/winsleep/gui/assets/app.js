@@ -589,8 +589,43 @@ let lastDrawnPlanGuid = '';
  */
 async function selectPlanToEdit(guid) {
   await renderPlanSettings(guid);
+  rememberEditedPlan(guid);
+}
+
+/**
+ /**
+  * 计划编辑器该显示哪个计划。
+  *
+  * **不跟着「当前生效的计划」跑。** 后台服务在 CPU 阈值附近抖一下就会换一个
+  * 计划；编辑器跟着它跑的话，每五秒换一个正在编辑的计划，面板被重画一遍，
+  * 用户没保存的改动当场就没了 —— 这正是「设置好过一会跳回原设置」的成因。
+  *
+  * 所以兜底只有「上次编辑的那个」：记住哪个计划是我们自己的事。
+  *
+  * @param {string} currentValue 下拉框此刻选中的 guid。
+  * @param {string} lastPlanGuid 记住的上次编辑的 guid。
+  * @returns {string} 要编辑的 guid；都没有就是空串（让用户自己选）。
+  */
+ function planToEdit(currentValue, lastPlanGuid) {
+   return currentValue || lastPlanGuid || '';
+ }
+
+ /** 记住「正在编辑哪个计划」。
+ *
+ * 记住之后编辑器就不再跟着「当前生效的计划」变——后台服务换计划的时候，
+ * 正在编辑的面板不会跟着换，用户没保存的改动也不会被冲掉。
+ */
+function rememberEditedPlan(guid) {
+  if (!guid) return;
   try {
-    await api().save_config({ last_plan_guid: guid });
+    const saving = api().save_config({ last_plan_guid: guid });
+    // **这个 promise 必须自己接住。** 它没有 await，失败会变成没人管的
+    // 拒绝，Node 直接把进程带崩。
+    if (saving && typeof saving.catch === 'function') {
+      saving.catch((err) => {
+        console.warn('the plan being edited could not be remembered', err);
+      });
+    }
   } catch (err) {
     // 记不住下次打开时回到哪个计划，仅此而已。
     console.warn('the plan being edited could not be remembered', err);
@@ -600,8 +635,24 @@ async function selectPlanToEdit(guid) {
 async function renderPlanSettings(guid) {
   const box = $('planSettings');
   const bar = $('planSaveBar');
+
+  // **面板上还有没保存的改动、而且要画的还是同一个计划：不重画。**
+  //
+  // 重画会把 planChanges 清空，用户刚改的数字当场就没了。以前这里无条件
+  // `box.innerHTML = ''; planChanges = {};`，而编辑器每五秒刷新一次、跟着
+  // 「当前生效的计划」跑——后台服务在 CPU 阈值附近抖一下就换一个计划，
+  // 面板跟着重画，改动被冲掉。表现就是「设置好过一会跳回原设置，完全
+  // 无法保存」。
+  if (guid && guid === lastDrawnPlanGuid && Object.keys(planChanges).length > 0) {
+    bar.hidden = false;
+    return;
+  }
+
   box.innerHTML = '';
-  planChanges = {};
+  // 只清掉这个计划上的改动，别把别的计划的一起清掉。
+  for (const [key, change] of Object.entries(planChanges)) {
+    if (!change.plan || change.plan === guid) delete planChanges[key];
+  }
 
   if (!guid) {
     const empty = document.createElement('p');
@@ -706,7 +757,13 @@ async function renderPlanSettings(guid) {
     picker.addEventListener('change', () => {
       const value = parseInt(picker.value, 10);
       if (!Number.isFinite(value)) return;
-      planChanges[row.guid] = { group: row.group, guid: row.guid, value };
+      planChanges[row.guid] = {
+        group: row.group,
+        guid: row.guid,
+        value,
+        // 记下这是哪个计划上的改动：换计划重画的时候好只清掉那个计划的。
+        plan: lastDrawnPlanGuid,
+      };
       $('planSaveHint').textContent = '有改动，还没保存';
       $('planSaveHint').className = 'hint';
     });
@@ -1211,12 +1268,18 @@ async function refresh() {
   syncActionPlanOptions();
 
   const editSelect = $('editPlanSelect');
-  // 编辑器选中的是 GUID：先保住用户当前选的那个，没有才退回「上次用的」
-  // 和「正在生效的」。
-  const wantedGuid = editSelect.value
-    || config.last_plan_guid
-    || data.active_plan_guid
-    || '';
+  // 编辑器选中的是 GUID：先保住用户当前选的那个，没有才退回「上次用的」。
+  //
+  // **不再兜底到「当前生效的计划」。** 后台服务在 CPU 阈值附近抖一下就会
+  // 换一个计划，编辑器跟着它跑，每五秒换一个正在编辑的计划——面板被重画
+  // 一遍，没保存的改动就没了。记住在编辑哪个计划是我们自己的事，不该由
+  // 「现在生效的是哪个」决定。
+  let wantedGuid = planToEdit(editSelect.value, config.last_plan_guid);
+  if (!wantedGuid && data.active_plan_guid) {
+    // 一次也没选过：先用现在生效的那个，并且记住它，之后就不再跟着变。
+    wantedGuid = data.active_plan_guid;
+    rememberEditedPlan(wantedGuid);
+  }
   fillPlanSelectByGuid(editSelect, plans, data.plan_guids || [], wantedGuid);
   // 下拉框里的计划换了（换了配置、计划被删、被复制），面板不能还写着旧的。
   if (editSelect.value && editSelect.value !== lastDrawnPlanGuid) {
@@ -1602,7 +1665,8 @@ function wire() {
 
   $('savePlanBtn').addEventListener('click', async () => {
     const guid = $('editPlanSelect').value;
-    const changes = Object.values(planChanges);
+    const changes = Object.values(planChanges)
+      .filter((change) => !change.plan || change.plan === guid);
     if (changes.length === 0) return;
     const result = await api().save_plan_settings(guid, changes);
     $('planSaveHint').textContent = result.ok ? '保存好了' : (result.message || '保存失败');
