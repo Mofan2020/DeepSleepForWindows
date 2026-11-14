@@ -289,6 +289,44 @@ MUTATIONS: list[tuple[str, Path, str, str]] = [
                 return""",
     ),
     (
+        "a lock whose owner died is never seen as stale",
+        SRC / "core" / "single.py",
+        """        if self.owner():
+            return not self.owner_alive()""",
+        """        if self.owner():
+            return False""",
+    ),
+    (
+        "a reused pid is taken for the owner of the lock",
+        SRC / "core" / "single.py",
+        "        return abs(actual - recorded) <= _START_TOLERANCE",
+        "        return True",
+    ),
+    (
+        "the daemon deletes a live window's lock",
+        SRC / "core" / "single.py",
+        """    if instance.owner_alive():
+        return False""",
+        """    if False:
+        return False""",
+    ),
+    (
+        "a second copy gives up instead of asking the running window",
+        SRC / "gui" / "app.py",
+        '''    if windowlink.request_show():
+        log.info("the running window was asked to come forward")
+        return "shown"''',
+        '''    if False:
+        log.info("the running window was asked to come forward")
+        return "shown"''',
+    ),
+    (
+        "the icon is never looked for once it is up",
+        SRC / "core" / "tray.py",
+        "            if there is False:",
+        "            if False:",
+    ),
+    (
         "the daemon does not count a failed switch",
         SRC / "core" / "daemon.py",
         "        self._plan_failures += 1\n",

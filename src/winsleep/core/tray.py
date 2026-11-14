@@ -179,6 +179,7 @@ def watch_notification_area(
     ready: Callable[[], bool],
     stop: threading.Event,
     beat: Callable[[], None] | None = None,
+    present: Callable[[], bool | None] | None = None,
     interval: float = _WATCH_INTERVAL,
 ) -> None:
     """Keep the icon in the area, and keep the heartbeat fresh.
@@ -194,6 +195,11 @@ def watch_notification_area(
       added again.  ``Icon.visible`` is the public way to do that; a
       ``False``/``True`` pair forces the ``NIM_DELETE`` + ``NIM_ADD``
       that Explorer needs to redraw its icons.
+    * *present* is asked whether the icon is really in the area, and a
+      missing one is put back.  Explorer coming back is only one of the
+      ways an icon disappears; the area staying put while the icon is
+      dropped looks exactly the same from here, and the transition above
+      never fires for it.
 
     Returns when *stop* is set.
     """
@@ -219,6 +225,28 @@ def watch_notification_area(
             except Exception as exc:  # noqa: BLE001
                 log.warning("the icon could not be added again: %s", exc)
         was_ready = now_ready
+
+        # **One more question, and it is the important one:** is the icon
+        # actually in the area?  ``Shell_NotifyIcon`` answers that, pystray
+        # throws the answer away, and a lost icon is then invisible to the
+        # program for the rest of the session.  That is what "the icon
+        # vanished by itself" looked like from the outside: no error, no
+        # log line, an icon that was simply not there any more.
+        if present is not None:
+            try:
+                there = present()
+            except Exception as exc:  # noqa: BLE001 - the icon outranks it
+                log.debug("the icon could not be looked for: %s", exc)
+                there = None
+            if there is False:
+                log.warning(
+                    "the icon is missing from the notification area; adding it again"
+                )
+                try:
+                    icon.visible = False
+                    icon.visible = True
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("the icon could not be added again: %s", exc)
 
         # The loop condition re-reads the event, so there is nothing to
         # break out of here.
@@ -418,6 +446,37 @@ class TrayIcon:
             pass
 
 
+#: How long the icon is given to appear before the shell is asked about
+#: it for the first time.
+_ADD_GRACE_SECONDS = 5.0
+
+
+def _presence_check(icon: Any) -> Callable[[], bool | None] | None:
+    """A callable that asks the shell whether the icon is in the area.
+
+    pystray keeps the handle of the window its icon belongs to private,
+    and there is no public way to ask "is my icon there?" - yet without
+    that question the program cannot tell an icon that is on screen from
+    one that never made it.  The handle is read with ``getattr`` and the
+    check is skipped while pystray does not have one, so a missing
+    attribute costs the check and nothing else.
+
+    The id is zero: see ``winapi.notify_icon_present`` for why.
+    """
+    from . import winapi
+
+    if not winapi.is_supported():
+        return None
+
+    def present() -> bool | None:
+        hwnd = getattr(icon, "_hwnd", 0) or 0
+        if not hwnd:
+            return None
+        return winapi.notify_icon_present(int(hwnd), 0)
+
+    return present
+
+
 def start_icon(
     *,
     on_show: Callable[[], None],
@@ -481,7 +540,12 @@ def start_icon(
     except Exception as exc:  # noqa: BLE001 - the window still works
         log.warning("the icon could not be added: %s", exc)
         return None
-    log.info("the icon is in the notification area")
+    # pystray adds the icon on a thread of its own a moment later, so this
+    # line says what was asked for, not what is on screen.  Whether it is
+    # really there is the watcher's question, and it is the only one that
+    # can be answered: Shell_NotifyIcon reports the result and pystray
+    # throws it away.
+    log.info("the icon was handed to the notification area")
 
     watcher = threading.Thread(
         target=watch_notification_area,
@@ -490,6 +554,7 @@ def start_icon(
             "ready": winapi.notification_area_ready,
             "stop": stop,
             "beat": heartbeat,
+            "present": _presence_check(icon),
         },
         name="winsleep-tray",
         daemon=True,

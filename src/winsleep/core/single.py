@@ -7,7 +7,19 @@ opening a second window and fighting over the same files.
 
 The lock is a file in the program directory.  The process that holds it
 is the one that is running; a copy that finds the lock taken does not
-take it, and asks the other one to come forward.
+take it - it asks the other one to come forward (``windowlink.request_show``)
+and, when nobody answers and the owner is gone, it takes the lock over.
+
+**The owner is named by pid and by process start time.**  A pid alone is
+not enough on Windows: numbers are reused quickly, and a lock left by a
+killed copy then points at an unrelated process that happens to be
+alive.  That is what made the program answer "there is already a window"
+while there was no window on the screen at all.
+
+**A dead owner makes the lock stale at once.**  The first version waited
+a minute before looking at the pid, so a copy that had just crashed
+blocked the program for a minute.  Waiting is only for a lock whose
+content cannot be read at all.
 """
 
 from __future__ import annotations
@@ -17,14 +29,18 @@ import os
 import time
 from pathlib import Path
 
-__all__ = ["SingleInstance", "lock_path"]
+__all__ = ["SingleInstance", "clear_if_stale", "lock_path"]
 
 log = logging.getLogger("winsleep.single")
 
-#: How long a lock that nobody owns any more is respected.  A process
-#: that was killed leaves its lock behind, and the program would then
-#: refuse to start forever.
+#: How long a lock that names nobody is respected.  A lock that names a
+#: live process is respected for as long as that process runs; this only
+#: covers a file whose content cannot be read.
 STALE_SECONDS = 60.0
+
+#: How far two readings of a process start time may differ before they
+#: are taken to be two different processes.
+_START_TOLERANCE = 2.0
 
 
 def lock_path() -> Path:
@@ -48,6 +64,7 @@ class SingleInstance:
     def __init__(self, path: Path | None = None) -> None:
         self._path = path or lock_path()
         self._fd: int | None = None
+        self._started = _process_start_time(os.getpid())
 
     @property
     def is_first(self) -> bool:
@@ -80,38 +97,118 @@ class SingleInstance:
         except OSError:
             return
 
+        self._fd = fd
+        self._write_owner(fd)
+
+    def _write_owner(self, fd: int) -> None:
+        """Put this process into the lock file.
+
+        Two lines: the pid, and the start time of the process that wrote
+        it.  A file written by an older version holds only the pid, and
+        is still understood - it just cannot tell a reused pid apart.
+        """
+        text = str(os.getpid())
+        if self._started is not None:
+            text += f"\n{self._started:.3f}"
         try:
-            os.write(fd, str(os.getpid()).encode("ascii"))
+            os.write(fd, text.encode("ascii"))
+            os.fsync(fd)
         except OSError:
             pass
-        self._fd = fd
+
+    def owner(self) -> dict[str, float | int | None]:
+        """What the lock file says: ``{"pid": ..., "started": ...}``.
+
+        An empty dictionary means the file holds nothing readable, which
+        is treated as "nobody knows who owns this".
+        """
+        try:
+            text = self._path.read_text(encoding="utf-8").strip()
+        except OSError:
+            return {}
+        if not text:
+            return {}
+        parts = text.splitlines()
+        try:
+            pid = int(parts[0].strip())
+        except ValueError:
+            return {}
+        started: float | None = None
+        if len(parts) > 1:
+            try:
+                started = float(parts[1].strip())
+            except ValueError:
+                started = None
+        return {"pid": pid, "started": started}
+
+    def owner_alive(self) -> bool:
+        """True when the process named in the lock is still running.
+
+        A reused pid is not the owner: the start time has to match.  A
+        lock written by an older version has no start time, and then the
+        pid is all there is to go on.
+        """
+        owner = self.owner()
+        pid = int(owner.get("pid", 0) or 0)
+        if pid <= 0:
+            return False
+        if not _process_alive(pid):
+            return False
+
+        recorded = owner.get("started")
+        if not isinstance(recorded, float):
+            return True
+        actual = _process_start_time(pid)
+        if actual is None:
+            # The start time cannot be read (no psutil, no rights).  The
+            # pid is alive, and that is the best answer available.
+            return True
+        return abs(actual - recorded) <= _START_TOLERANCE
 
     def _stale(self) -> bool:
-        """True when the lock is old enough that nobody owns it."""
+        """True when nobody holds the lock.
+
+        A named owner is asked first, so a dead owner is stale at once
+        instead of a minute later.  Only a lock with nothing readable in
+        it falls back to the age rule.
+        """
+        if not self._path.exists():
+            return True
+
+        if self.owner():
+            return not self.owner_alive()
+
         try:
             age = time.time() - self._path.stat().st_mtime
         except OSError:
             return True
-        if age <= STALE_SECONDS:
-            return False
-        # The file is old, but the process that wrote it may still be
-        # running - it just has not touched the file for a while.  So
-        # the process is asked whether it is alive.
-        pid = self._owner()
-        if pid and _process_alive(pid):
-            return False
-        return True
+        return age > STALE_SECONDS
 
-    def _owner(self) -> int:
-        """The process that holds the lock."""
+    def take_over(self) -> bool:
+        """Take the lock away from an owner that is gone.
+
+        Returns True when this process holds the lock afterwards.  A live
+        owner is never displaced: two windows writing the same settings is
+        worse than one window that will not come forward.
+        """
+        if self._fd is not None:
+            return True
+        if self._path.exists() and self.owner_alive():
+            return False
         try:
-            text = self._path.read_text(encoding="utf-8").strip()
-            return int(text)
-        except (OSError, ValueError):
-            return 0
+            self._path.unlink()
+        except OSError:
+            pass
+        self.acquire()
+        return self.is_first
 
     def release(self) -> None:
-        """Give the lock back."""
+        """Give the lock back.
+
+        Only a lock this process still owns is removed.  When another copy
+        has taken it over in the meantime, deleting the file would hand a
+        second window to the next double click.
+        """
         if self._fd is None:
             return
         try:
@@ -119,10 +216,52 @@ class SingleInstance:
         except OSError:
             pass
         self._fd = None
+
+        owner_pid = int(self.owner().get("pid", 0) or 0)
+        if owner_pid and owner_pid != os.getpid():
+            return
         try:
             self._path.unlink()
         except OSError:
             pass
+
+
+def clear_if_stale() -> bool:
+    """Remove the lock when nobody holds it.  True when it was removed.
+
+    The daemon runs whether or not a window does, so it cannot tell by
+    itself whether a lock is in use.  It used to delete the file on every
+    start - which is a live window's lock, and then a double click opened
+    a second window.  Asking the lock instead of assuming is the fix.
+    """
+    instance = SingleInstance()
+    if not instance._path.exists():
+        return False
+    if instance.owner_alive():
+        return False
+    try:
+        instance._path.unlink()
+    except OSError:
+        return False
+    return True
+
+
+def _process_start_time(pid: int) -> float | None:
+    """When the process with that number started, or None.
+
+    ``psutil`` is the only portable way to ask.  Without it the pid is
+    all there is, and the caller falls back to that.
+    """
+    if pid <= 0:
+        return None
+    try:
+        import psutil
+    except ImportError:
+        return None
+    try:
+        return float(psutil.Process(pid).create_time())
+    except Exception:  # noqa: BLE001 - psutil raises many things
+        return None
 
 
 def _process_alive(pid: int) -> bool:

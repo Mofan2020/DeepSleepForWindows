@@ -329,14 +329,15 @@ class Daemon:
     # -- lifecycle -------------------------------------------------------
 
     def run_forever(self) -> None:
-        # The lock file is only for the GUI to prevent multiple windows.
-        # The daemon runs in session 0 and doesn't need it, so clean it up.
+        # The lock file belongs to the window, not to the daemon.  It used
+        # to be deleted here on every start, which is a *live* window's
+        # lock - and then a double click opened a second window.  Only a
+        # lock nobody holds is cleared.
         try:
             from . import single
-            lock = single.lock_path()
-            if lock.exists():
-                lock.unlink()
-                log.info("removed stale window lock file")
+
+            if single.clear_if_stale():
+                log.info("removed a stale window lock file")
         except Exception:  # noqa: BLE001 - lock file is best effort
             pass
 

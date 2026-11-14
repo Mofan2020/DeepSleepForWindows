@@ -36,6 +36,7 @@ __all__ = [
     "release_execution_state",
     "lock_workstation",
     "notification_area_ready",
+    "notify_icon_present",
     "is_supported",
 ]
 
@@ -330,6 +331,73 @@ def notification_area_ready() -> bool:
         return bool(find_child(taskbar, None, "TrayNotifyWnd", None))
     except (OSError, AttributeError, ValueError):
         return False
+
+class _NOTIFYICONIDENTIFIER(ctypes.Structure):
+    """The handle and id of one icon, for ``Shell_NotifyIconGetRect``."""
+
+    _fields_ = [
+        ("cbSize", wintypes.DWORD),
+        ("hWnd", wintypes.HWND),
+        ("uID", wintypes.UINT),
+        ("guidItem", GUID),
+    ]
+
+
+class _ICONRECT(ctypes.Structure):
+    _fields_ = [
+        ("left", wintypes.LONG),
+        ("top", wintypes.LONG),
+        ("right", wintypes.LONG),
+        ("bottom", wintypes.LONG),
+    ]
+
+
+def notify_icon_present(hwnd: int, uid: int = 0) -> bool | None:
+    """True when that icon is in the notification area right now.
+
+    ``None`` means the question cannot be answered on this system, which
+    is different from "no" and must not be treated as one.
+
+    **Why this is needed at all.**  ``Shell_NotifyIcon(NIM_ADD)`` returns
+    a ``BOOL`` and pystray throws it away, so an icon that was never added
+    looks exactly like one that was: the tray is empty, the program is
+    happy, and nothing is logged.  Asking the shell afterwards is the only
+    way to tell the two apart.
+
+    **The id is zero.**  pystray passes ``hID=id(self)`` when it builds
+    ``NOTIFYICONDATAW``, but the field is called ``uID``; ``ctypes`` takes
+    an unknown keyword as a plain attribute and leaves the real field at
+    its default.  Every pystray icon therefore has ``uID == 0``.  That is
+    pystray's business, but it is what has to be asked for here.
+    """
+    if not is_supported():
+        return None
+    if not hwnd:
+        return None
+
+    try:
+        shell = _dll("shell32")
+        get_rect = shell.Shell_NotifyIconGetRect
+        get_rect.restype = ctypes.c_long
+        get_rect.argtypes = [
+            ctypes.POINTER(_NOTIFYICONIDENTIFIER),
+            ctypes.POINTER(_ICONRECT),
+        ]
+    except (OSError, AttributeError, ValueError):
+        return None
+
+    ident = _NOTIFYICONIDENTIFIER(
+        cbSize=ctypes.sizeof(_NOTIFYICONIDENTIFIER),
+        hWnd=hwnd,
+        uID=uid,
+        guidItem=GUID(),
+    )
+    rect = _ICONRECT()
+    try:
+        return get_rect(ctypes.byref(ident), ctypes.byref(rect)) == 0
+    except (OSError, AttributeError, ValueError):
+        return None
+
 
 
 # ---------------------------------------------------------------- suspend

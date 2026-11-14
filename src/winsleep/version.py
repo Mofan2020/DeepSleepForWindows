@@ -8,4 +8,4 @@ APP_NAME = "DeepSleepForWindows"
 #: What the window title and the About box say.
 DISPLAY_NAME = "DeepSleep For Windows(Beta)"
 
-__version__ = "0.5.5"
+__version__ = "0.5.6"

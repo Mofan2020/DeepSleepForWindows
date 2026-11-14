@@ -803,3 +803,40 @@ api().plan_settings(guid)`。对面抛出时整个函数中断——面板已经
 
 后端也记一行 `plan settings for <名字> (<guid>): N 行`。读成 0 行和读成
 旧值，修法完全不同，光看界面分不出来。
+
+### 双击没反应：第二份程序根本不问第一份
+
+现场日志里 6 次 `there is already a window; this copy gives up`，
+没有任何异常。根因是 `gui/app.py` 拿到锁就 `return 0`——`core/single.py`
+的文件头写着「asks the other one to come forward」，但代码里没有这条道。
+
+现在：第二份通过回环端口（`core/windowlink.py`，端口写进
+`app_dir()/window.port`）请第一份 `window.show()` + `restore()`；
+没人应答且锁的主人已经不在了，就接管锁自己开窗口。主人还活着但不应答
+时不开第二个窗口——两个窗口会互相覆盖设置，比开不出来更糟。
+
+锁文件从此写两行：pid 和第二行进程启动时间。只有 pid 时，被强杀的
+进程留下的锁在 pid 被系统复用之后会永远「活着」，程序就再也起不来。
+现在主人已死立刻算陈旧（原来要先等 60 秒才看 pid）。daemon 也不再在
+启动时无条件删锁——那是**活着的**窗口的锁。
+
+### 托盘图标：pystray 把 NIM_ADD 的返回值丢掉了
+
+`Shell_NotifyIcon(NIM_ADD)` 失败时返回 0，pystray 丢掉不管，于是「图标
+没加上」和「图标好好的」在程序里长得一模一样。日志里那句「the icon is
+in the notification area」是在 `run_detached()` 之后打的无条件日志，不算数
+（现在改成「handed to」）。
+
+查图标的办法：`Shell_NotifyIconGetRect`（winapi.notify_icon_present）。
+**pystray 的图标 uID 永远是 0**——它拼 `NOTIFYICONDATAW` 时传的是
+`hID=id(self)`，而字段叫 `uID`，ctypes 把陌生关键字当普通属性收下，
+真正的字段保持默认值。所以查的时候必须用 uid=0，按 `id()` 查永远查不到。
+
+看门狗每拍多问一句「图标还在吗」，不在就 `visible=False/True` 补一次。
+Explorer 没重启但图标被丢掉，原来那段「区域消失又回来」的判断永远不触发。
+
+真机实测（192.168.1.32，Win11 build 26200）：图标其实一直都在，只是在
+Win11 的「隐藏的图标」溢出区里（`HKCU\Control Panel\NotifyIconSettings`
+里 UID=0、无 IsPromoted）。所以「图标自己没了」有一半是溢出区的观感问题，
+而双击打不开是实打实的代码 bug。跨进程验证过 `Shell_NotifyIconGetRect`
+能读到别的进程的图标（自建图标 PRESENT，删掉后 MISSING）。

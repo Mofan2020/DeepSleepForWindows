@@ -64,6 +64,21 @@ def make_close_handler(window: Any) -> Callable[[], bool]:
     return _hide_instead_of_closing
 
 
+def show_window(window: Any) -> None:
+    """Bring the window back in front of the user.
+
+    Both halves use this: the tray menu item and a second copy of the
+    program asking the first one to come forward.  pywebview marshals
+    ``show`` to the interface thread itself, so this is safe from the
+    thread that answers the request.
+    """
+    try:
+        window.show()
+        window.restore()
+    except Exception as exc:  # noqa: BLE001 - the icon stays useful
+        log.debug("the window could not be shown: %s", exc)
+
+
 def _start_tray(window: object) -> object:
     """Put the icon in the notification area, owned by this process.
 
@@ -80,11 +95,7 @@ def _start_tray(window: object) -> object:
     from ..core import install, paths, tray, winapi, winpower
 
     def _show() -> None:
-        try:
-            window.show()
-            window.restore()
-        except Exception as exc:  # noqa: BLE001 - the icon stays useful
-            log.debug("the window could not be shown: %s", exc)
+        show_window(window)
 
     def _lock() -> None:
         winapi.lock_workstation()
@@ -121,6 +132,46 @@ def _start_tray(window: object) -> object:
         heartbeat=_beat,
         on_override=_override,
     )
+
+
+def claim_window(instance: Any) -> str:
+    """Decide what a copy that has just started has to do about the window.
+
+    Returns one of:
+
+    ``"first"``
+        This copy owns the window and has to open it.
+    ``"shown"``
+        Another copy owns it and was asked to come forward.
+    ``"refused"``
+        Another copy owns it and did not answer.  Nothing is opened: two
+        windows write the same settings, which is worse than one window
+        that will not come forward.
+
+    **Asking is the whole point.**  The first version simply gave up when
+    the lock was taken, so double clicking did nothing at all - no window,
+    no message, and a log line nobody reads.  For someone who cannot find
+    the icon in the tray that is a dead program.
+    """
+    from ..core import windowlink
+
+    if instance.is_first:
+        return "first"
+
+    if windowlink.request_show():
+        log.info("the running window was asked to come forward")
+        return "shown"
+
+    # Nobody answered: the owner is gone, or the lock is a leftover from a
+    # copy that was killed.  Either way this copy takes it over.
+    if instance.take_over():
+        log.info("the lock belonged to a copy that was gone; took it over")
+        return "first"
+
+    log.warning(
+        "another copy holds the window but did not answer; not opening a second one"
+    )
+    return "refused"
 
 
 def run() -> int:
@@ -166,14 +217,12 @@ def run() -> int:
     if not assets.is_dir():
         raise RuntimeError(f"the interface files are missing: {assets}")
 
-    # Only one copy of the window may be open.  When there already is
-    # one, this copy gives up instead of opening a second window.
-    from ..core import single
+    # Only one copy of the window may be open.
+    from ..core import single, windowlink
 
     instance = single.SingleInstance()
     instance.acquire()
-    if not instance.is_first:
-        log.info("there is already a window; this copy gives up")
+    if claim_window(instance) != "first":
         return 0
 
     bridge = Bridge()
@@ -188,6 +237,17 @@ def run() -> int:
     # The bridge needs the window to open the file dialog, and the
     # window only exists after it has been created.
     bridge.attach_window(window)
+
+    # A second copy asks here.  It has to exist before the window is shown
+    # so that a double click made while the window is still coming up is
+    # answered rather than racing it.
+    show_server = None
+    try:
+        show_server = windowlink.ShowRequestServer(lambda: show_window(window))
+        show_server.start()
+        log.info("the window can be asked to come forward on 127.0.0.1:%d", show_server.port)
+    except Exception as exc:  # noqa: BLE001 - the window still opens
+        log.warning("the window cannot be asked to come forward: %s", exc)
     # 老版本留下的独立托盘任务要清掉，不然登录时它会再挂一个图标出来。
     try:
         from ..core import install as install_mod
@@ -210,6 +270,11 @@ def run() -> int:
     try:
         webview.start()
     finally:
+        if show_server is not None:
+            try:
+                show_server.stop()
+            except Exception:  # noqa: BLE001 - ending anyway
+                pass
         if tray_icon is not None:
             try:
                 tray_icon.stop()
