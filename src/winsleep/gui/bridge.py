@@ -155,8 +155,24 @@ class Bridge:
     def _load(self) -> config_mod.Config:
         return config_mod.load(self._config_path)
 
-    def _save(self, config: config_mod.Config) -> None:
-        config_mod.save(config, self._config_path)
+    def _save(self, config: config_mod.Config) -> dict[str, Any]:
+        """Write the settings, and say whether that worked.
+
+        **一次写不进去必须说出来。** 窗口每五秒用配置文件里的值刷一次输入
+        框，所以「保存悄悄失败」在用户眼里就是「设置好过一会跳回原来的」——
+        这正是这一版要修的那个报告。返回失败，界面才有话可说；同时记一行
+        日志，事后能查到到底是写盘失败还是根本没调用。
+        """
+        try:
+            config_mod.save(config, self._config_path)
+        except Exception as exc:  # noqa: BLE001 - 报告，不吞掉
+            log.exception("the settings could not be written")
+            return {
+                "ok": False,
+                "message": f"设置没能写进 {self._config_path}：{exc}",
+            }
+        log.info("settings written to %s", self._config_path)
+        return {"ok": True}
 
     def _daemon_request(self, message: dict[str, Any]) -> dict[str, Any] | None:
         """Send one message to the daemon, or ``None`` when it is down."""
@@ -221,15 +237,21 @@ class Bridge:
         """
         current = self._load()
         merged = config_mod.Config.from_dict({**current.to_dict(), **payload})
-        self._save(merged)
-        return {"ok": True, "config": merged.to_dict()}
+        result = self._save(merged)
+        answer = {"ok": result["ok"], "config": merged.to_dict()}
+        if not result["ok"]:
+            answer["message"] = result["message"]
+        return answer
 
     def set_server_mode(self, enabled: bool) -> dict[str, Any]:
         """Turn server mode on or off."""
         config = self._load()
         config.server_mode = bool(enabled)
-        self._save(config)
-        return {"ok": True, "server_mode": config.server_mode}
+        result = self._save(config)
+        answer = {"ok": result["ok"], "server_mode": config.server_mode}
+        if not result["ok"]:
+            answer["message"] = result["message"]
+        return answer
 
     def set_override(self, minutes: int) -> dict[str, Any]:
         """Hold the machine awake for a while, then let it go on its own.
@@ -265,8 +287,11 @@ class Bridge:
         """Hold the machine awake, or stop doing that."""
         config = self._load()
         config.keep_awake = bool(enabled)
-        self._save(config)
-        return {"ok": True, "keep_awake": config.keep_awake}
+        result = self._save(config)
+        answer = {"ok": result["ok"], "keep_awake": config.keep_awake}
+        if not result["ok"]:
+            answer["message"] = result["message"]
+        return answer
 
     def switch_plan(self, name: str) -> dict[str, Any]:
         """Switch the active power plan right now."""

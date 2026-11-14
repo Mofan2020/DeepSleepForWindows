@@ -1235,6 +1235,27 @@ async function refresh() {
 
 /* Save one of the number fields.  Each one is a different setting, so
  * they are saved separately. */
+/* 保存一项设置，并且**把失败说出来**。
+
+ * 窗口每五秒按配置文件刷一次输入框，所以保存悄悄失败在用户眼里就是
+ * 「设置好过一会又跳回去了」。这里把结果写到设置页那行提示上。
+ */
+async function saveSettings(patch) {
+  let result = null;
+  try {
+    result = await api().save_config(patch);
+  } catch (err) {
+    result = { ok: false, message: String(err) };
+  }
+  const hint = $('settingsSaved');
+  if (hint) {
+    const ok = !!(result && result.ok);
+    hint.textContent = ok ? '已保存' : ((result && result.message) || '保存失败');
+    hint.className = ok ? 'hint ok' : 'hint bad';
+  }
+  return !!(result && result.ok);
+}
+
 function saveNumberField(id) {
   const field = $(id);
   const value = parseFloat(field.value);
@@ -1242,16 +1263,16 @@ function saveNumberField(id) {
 
   if (id === 'idleMinutes') {
     if (value <= 0) return;
-    api().save_config({ idle_seconds: Math.round(value * 60) });
+    saveSettings({ idle_seconds: Math.round(value * 60) });
     return;
   }
   if (id === 'idleCpu') {
-    api().save_config({ idle_cpu_percent: value });
+    saveSettings({ idle_cpu_percent: value });
     return;
   }
   if (id === 'serverLockMinutes') {
     if (value <= 0) return;
-    api().save_config({ server_lock_seconds: Math.round(value * 60) });
+    saveSettings({ server_lock_seconds: Math.round(value * 60) });
   }
 }
 
@@ -1410,12 +1431,12 @@ function wire() {
   });
 
   $('idlePlanSelect').addEventListener('change', async () => {
-    await api().save_config({ idle_plan: $('idlePlanSelect').value });
+    await saveSettings({ idle_plan: $('idlePlanSelect').value });
     $('idlePlanValue').textContent = $('idlePlanSelect').value;
   });
 
   $('activePlanSelect').addEventListener('change', async () => {
-    await api().save_config({ active_plan: $('activePlanSelect').value });
+    await saveSettings({ active_plan: $('activePlanSelect').value });
     $('activePlanValue').textContent = $('activePlanSelect').value;
   });
 
