@@ -335,6 +335,18 @@ MUTATIONS: list[tuple[str, Path, str, str]] = [
         "        return True",
     ),
     (
+        "an old lock pointing at another program is taken for the owner",
+        SRC / "core" / "single.py",
+        "            return _is_our_program(pid)",
+        "            return True",
+    ),
+    (
+        "an old lock pointing at another copy of the program is not the owner",
+        SRC / "core" / "single.py",
+        "    own = Path(sys.executable).name.lower()\n    return name == own",
+        "    own = Path(sys.executable).name.lower()\n    return name != own",
+    ),
+    (
         "the daemon deletes a live window's lock",
         SRC / "core" / "single.py",
         """    if instance.owner_alive():

@@ -16,6 +16,7 @@ put has to be put back, and nothing else in the program can notice it.
 from __future__ import annotations
 
 import os
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -187,6 +188,64 @@ def test_a_lock_of_an_older_version_is_understood(tmp_path: Path) -> None:
 
     with single.SingleInstance(path) as instance:
         assert instance.is_first is False
+
+
+def test_an_old_lock_pointing_at_another_program_is_not_the_owner(
+    tmp_path: Path,
+) -> None:
+    """An old lock, and the pid now belongs to something else.
+
+    **This is what the machine was actually doing.** The lock had been
+    written by an older version and held a pid alone.  That copy was
+    gone, and Windows had handed the number to an unrelated program.
+    The lock still looked taken, so the next copy refused to open a
+    window - and the user could not start the program at all.
+
+    The executable is what tells the two apart: a copy of this program
+    runs the same file as the copy that wrote the lock, whatever else
+    is running.
+    """
+    path = tmp_path / "window.lock"
+    other = _start_an_unrelated_program()
+    try:
+        _write_lock(path, str(other.pid), age=3600)
+        with single.SingleInstance(path) as instance:
+            assert instance.is_first is True
+    finally:
+        other.kill()
+        other.wait()
+
+
+def test_an_old_lock_pointing_at_another_copy_is_the_owner(
+    tmp_path: Path,
+) -> None:
+    """An old lock, and the pid belongs to a copy of this program.
+
+    That copy really is running, so it keeps the lock - even though the
+    lock cannot say when it started.
+    """
+    path = tmp_path / "window.lock"
+    _write_lock(path, str(os.getpid()), age=3600)
+
+    with single.SingleInstance(path) as instance:
+        assert instance.is_first is False
+
+
+def _start_an_unrelated_program() -> subprocess.Popen[bytes]:
+    """Start a process that is not this program.
+
+    The command differs per platform because the point of the process
+    is to be something whose executable file name is *not* the name of
+    the program under test - the lock is told apart from an unrelated
+    process by that name.
+    """
+    if os.name == "nt":
+        command = ["cmd.exe", "/c", "timeout", "/t", "30", "/nobreak"]
+    else:
+        command = ["/bin/sh", "-c", "sleep 30"]
+    return subprocess.Popen(
+        command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    )
 
 
 def test_releasing_does_not_steal_a_lock_from_a_new_owner(tmp_path: Path) -> None:

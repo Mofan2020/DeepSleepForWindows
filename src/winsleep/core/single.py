@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import time
 from pathlib import Path
 
@@ -146,7 +147,11 @@ class SingleInstance:
 
         A reused pid is not the owner: the start time has to match.  A
         lock written by an older version has no start time, and then the
-        pid is all there is to go on.
+        pid is all there is to go on - so the executable is asked
+        instead.  A pid that now belongs to some other program is not
+        the owner, and saying otherwise is what made the program
+        answer "there is already a window" while there was no window on
+        the screen at all.
         """
         owner = self.owner()
         pid = int(owner.get("pid", 0) or 0)
@@ -157,7 +162,9 @@ class SingleInstance:
 
         recorded = owner.get("started")
         if not isinstance(recorded, float):
-            return True
+            # An old lock: only the pid.  The number may have been
+            # handed to something else by now.
+            return _is_our_program(pid)
         actual = _process_start_time(pid)
         if actual is None:
             # The start time cannot be read (no psutil, no rights).  The
@@ -279,3 +286,40 @@ def _process_alive(pid: int) -> bool:
     except OSError:
         return False
     return True
+
+
+def _executable_name(pid: int) -> str:
+    """The file name of the program that process is running.
+
+    Empty when it cannot be read (no psutil, or no rights).
+    """
+    if pid <= 0:
+        return ""
+    try:
+        import psutil
+    except ImportError:
+        return ""
+    try:
+        return Path(psutil.Process(pid).exe()).name.lower()
+    except Exception:  # noqa: BLE001 - psutil raises many things
+        return ""
+
+
+def _is_our_program(pid: int) -> bool:
+    """True when that process is another copy of this program.
+
+    **This is what separates "another copy is running" from "the number
+    was reused".** A lock written by an older version holds only a pid,
+    and Windows hands numbers out again quickly - so that pid can point
+    at something entirely unrelated.  Asking the process for its
+    executable answers the question the start time would have answered,
+    and the name is the same for every copy of the program.
+    """
+    name = _executable_name(pid)
+    if not name:
+        # The name cannot be read, so the question cannot be answered.
+        # The pid is all there is, and the caller decides what to do
+        # with that.
+        return True
+    own = Path(sys.executable).name.lower()
+    return name == own
