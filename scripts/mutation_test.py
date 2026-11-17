@@ -343,8 +343,8 @@ MUTATIONS: list[tuple[str, Path, str, str]] = [
     (
         "an old lock pointing at another copy of the program is not the owner",
         SRC / "core" / "single.py",
-        "    own = Path(sys.executable).name.lower()\n    return name == own",
-        "    own = Path(sys.executable).name.lower()\n    return name != own",
+        "    return name == _executable_name(os.getpid())",
+        "    return name != _executable_name(os.getpid())",
     ),
     (
         "the daemon deletes a live window's lock",

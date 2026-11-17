@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import logging
 import os
-import sys
 import time
 from pathlib import Path
 
@@ -314,6 +313,13 @@ def _is_our_program(pid: int) -> bool:
     at something entirely unrelated.  Asking the process for its
     executable answers the question the start time would have answered,
     and the name is the same for every copy of the program.
+
+    **Both sides are asked the same way.**  ``sys.executable`` is not the
+    same string psutil reports: on a Linux runner it is
+    ``.../x64/bin/python3`` while psutil resolves the symlink and answers
+    ``/usr/bin/python3.11``.  Comparing those two would say "not our
+    program" for every copy.  So this process is asked through psutil as
+    well, and the two answers are compared.
     """
     name = _executable_name(pid)
     if not name:
@@ -321,5 +327,4 @@ def _is_our_program(pid: int) -> bool:
         # The pid is all there is, and the caller decides what to do
         # with that.
         return True
-    own = Path(sys.executable).name.lower()
-    return name == own
+    return name == _executable_name(os.getpid())
