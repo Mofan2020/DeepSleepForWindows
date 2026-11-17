@@ -840,3 +840,44 @@ Win11 的「隐藏的图标」溢出区里（`HKCU\Control Panel\NotifyIconSetti
 里 UID=0、无 IsPromoted）。所以「图标自己没了」有一半是溢出区的观感问题，
 而双击打不开是实打实的代码 bug。跨进程验证过 `Shell_NotifyIconGetRect`
 能读到别的进程的图标（自建图标 PRESENT，删掉后 MISSING）。
+
+## 0.5.9：旧格式的锁，指向了别的程序
+
+### 现象
+
+托盘里没有图标，双击 exe 也不开窗口，任务管理器里能看到进程活着但界面调不出来。
+
+### 根因
+
+`window.lock` 里只有一个 pid（旧版本写的格式），那个 pid 现在属于
+GameViewer——DeepSleep 的窗口早就退出了，Windows 把号码回收给了别人。
+
+`owner_alive()` 对旧格式的锁只认 pid：进程活着就算主人在。于是每次启动
+都判定「已经有一个窗口在跑」，`take_over()` 拒绝接管，窗口永远不开。
+`clear_if_stale()` 同理，daemon 也不敢删这个「活着的」锁。
+
+### 改法
+
+旧格式的锁在只拿到 pid 时，还要问那个进程跑的是不是本程序
+（`psutil.Process(pid).exe()` 的文件名）。是别的程序就不是主人，锁立刻作废。
+
+**两边必须用同一个办法取名字。** 第一版拿 `sys.executable` 比 psutil 报的
+名字：Linux runner 上前者是 `.../x64/bin/python3`、后者解析符号链接后是
+`/usr/bin/python3.11`，于是「本程序的另一个副本」被判成外人，锁被误删。
+本机 macOS 上两者恰好一致，本地全绿、CI 三条红。现在 `os.getpid()` 也走
+`psutil`，比的才是同一个东西。
+
+### 验证
+
+- 本机：402 通过、0 失败、7 跳过（windows-only）
+- `python:3.11-slim` 容器里跑 `test_window_handover.py` 与
+  `test_newfeatures.py`：34 条全过（那三条平台相关的用例在真 Linux 上验的）
+- 变异测试 69/69 全抓，新增两条守 `_is_our_program` 的两个方向：
+  - 「旧锁指向别的程序被当成主人」→ 红
+  - 「旧锁指向本程序的另一个副本不算主人」→ 红
+- 前端 31/31
+
+### 没验的部分
+
+真机上装 v0.5.9 之后的行为没验过。`window.lock` 里现在那条 `8096` 是旧版本
+留下的，新版本第一次启动就该判成陈旧并接管——这一步要人工确认。
